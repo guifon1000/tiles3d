@@ -1,0 +1,121 @@
+import os
+from PIL import Image
+import glob
+
+def convert_to_16bit_colors(image):
+    """Convert image to 16-bit color format (RGB565-like)"""
+    # Convert to RGB if not already
+    if image.mode != 'RGB':
+        image = image.convert('RGB')
+    
+    # Reduce color depth to simulate 16-bit colors
+    # 5 bits for red, 6 bits for green, 5 bits for blue
+    pixels = image.load()
+    width, height = image.size
+    
+    for y in range(height):
+        for x in range(width):
+            r, g, b = pixels[x, y]
+            # Reduce to 5-bit red (0-31), 6-bit green (0-63), 5-bit blue (0-31)
+            r = (r >> 3) << 3  # Keep top 5 bits
+            g = (g >> 2) << 2  # Keep top 6 bits
+            b = (b >> 3) << 3  # Keep top 5 bits
+            pixels[x, y] = (r, g, b)
+    
+    return image
+
+def process_image(img_path):
+    """Process a single image: resize to 14x14, convert to 16-bit colors, add grey border"""
+    try:
+        # Open and resize to 14x14
+        img = Image.open(img_path)
+        img = img.resize((14, 14), Image.Resampling.LANCZOS)
+        
+        # Convert to 16-bit color format
+        img = convert_to_16bit_colors(img)
+        
+        # Create 16x16 image with grey border
+        bordered_img = Image.new('RGB', (16, 16), (128, 128, 128))  # Grey background
+        bordered_img.paste(img, (1, 1))  # Paste 14x14 image with 1px offset
+        
+        return bordered_img
+    except Exception as e:
+        print(f"Error processing {img_path}: {e}")
+        return None
+
+def create_transparent_texture():
+    """Create a transparent 14x14 texture with grey border"""
+    # Create transparent 14x14 texture
+    transparent_img = Image.new('RGBA', (14, 14), (0, 0, 0, 0))
+    
+    # Create 16x16 with grey border
+    bordered_img = Image.new('RGB', (16, 16), (128, 128, 128))
+    
+    # Convert transparent image to RGB for pasting
+    rgb_transparent = Image.new('RGB', (14, 14), (255, 255, 255))
+    rgb_transparent.putalpha(0)  # Make it as transparent as possible in RGB
+    
+    # Since we're working with RGB, we'll use a light grey for "transparent" areas
+    transparent_rgb = Image.new('RGB', (14, 14), (200, 200, 200))
+    bordered_img.paste(transparent_rgb, (1, 1))
+    
+    return bordered_img
+
+def create_texture_atlas():
+    """Main function to create the texture atlas"""
+    # Get all image files from img/ folder
+    img_folder = "img"
+    if not os.path.exists(img_folder):
+        print(f"Error: {img_folder} folder not found!")
+        return
+    
+    # Supported image formats
+    extensions = ['*.png', '*.jpg', '*.jpeg', '*.bmp', '*.gif', '*.tiff']
+    image_files = []
+    
+    for ext in extensions:
+        image_files.extend(glob.glob(os.path.join(img_folder, ext)))
+        image_files.extend(glob.glob(os.path.join(img_folder, ext.upper())))
+    
+    print(f"Found {len(image_files)} image files")
+    
+    # Process images
+    processed_textures = []
+    
+    for img_path in image_files:
+        print(f"Processing: {os.path.basename(img_path)}")
+        texture = process_image(img_path)
+        if texture:
+            processed_textures.append(texture)
+    
+    # Create 16x16 texture atlas (256 total textures)
+    atlas_size = 16 * 16  # 256 textures
+    texture_size = 16  # Each texture is 16x16
+    atlas_width = atlas_height = 16 * texture_size  # 256x256 pixels
+    
+    # Create the atlas image
+    atlas = Image.new('RGB', (atlas_width, atlas_height), (0, 0, 0))
+    
+    # Fill the atlas
+    for i in range(atlas_size):
+        row = i // 16
+        col = i % 16
+        x = col * texture_size
+        y = row * texture_size
+        
+        if i < len(processed_textures):
+            # Use processed texture
+            atlas.paste(processed_textures[i], (x, y))
+        else:
+            # Use transparent texture for empty spots
+            transparent_texture = create_transparent_texture()
+            atlas.paste(transparent_texture, (x, y))
+    
+    # Save the texture atlas
+    atlas.save('texture_atlas.png')
+    print(f"Texture atlas created: texture_atlas.png")
+    print(f"Atlas size: {atlas_width}x{atlas_height} pixels")
+    print(f"Used {len(processed_textures)} textures, filled {atlas_size - len(processed_textures)} empty spots")
+
+if __name__ == "__main__":
+    create_texture_atlas()
