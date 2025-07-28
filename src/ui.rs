@@ -1,4 +1,6 @@
-use bevy::prelude::*;
+use bevy::ecs::entity;
+use bevy::{prelude::*, transform};
+use crate::planisphere;
 use crate::player::{PlayerSubpixelPosition, EntitySubpixelPosition, Player};
 use crate::terrain::TerrainCenter;
 
@@ -66,38 +68,40 @@ pub fn setup_ui(mut commands: Commands) {
 /// UPDATED: Display coordinates using new shared positioning component
 pub fn update_coordinate_display(
     // Try to get player position from new shared component first, fallback to old resource
-    player_query: Query<&EntitySubpixelPosition, With<Player>>,
-    player_subpixel_resource: Res<PlayerSubpixelPosition>, // Fallback for compatibility
+    player_query: Query<(Entity, &Transform, &EntitySubpixelPosition, &Player)>,
     _terrain_center: Res<TerrainCenter>,
     mut text_query: Query<&mut Text, With<CoordinateDisplay>>,
+    planisphere : Res<planisphere::Planisphere>,
 ) {
+    let  mut world_pos  = Vec3::ZERO;
     for mut text in text_query.iter_mut() {
         // Get coordinates from new shared component if available, otherwise use old resource
-        let (world_pos, geo_coords, subpixel, source) = if let Ok(player_position) = player_query.single() {
-            // Use new shared component
-            (player_position.world_pos, player_position.geo_coords, player_position.subpixel, "RAYCAST")
-        } else {
-            // Fallback to old resource for compatibility
-            println!("UI: Player component not found, using fallback resource");
-            (player_subpixel_resource.world_pos, player_subpixel_resource.geo_coords, player_subpixel_resource.subpixel, "TILES")
-        };
-        
-        let (lon, lat) = geo_coords;
-        let (i, j, k) = subpixel;
-        
-        // Format the coordinate information into a readable display
-        let coordinate_text = format!(
-            "Player Position ({}):\n\
-            World: ({:.2}, {:.2}, {:.2})\n\
-            Geo: ({:.6}°, {:.6}°)\n\
-            Tile: ({}, {}, {})",
-            source,                                   // Show which method was used
-            world_pos.x, world_pos.y, world_pos.z,  // World coordinates with 2 decimal places
-            lon, lat,                                 // Geographic coordinates with 6 decimal places
-            i, j, k                                   // Subpixel coordinates as integers
-        );
-        
-        // Update the text content
-        **text = coordinate_text;
+        for (entity, transform, ijkpos, player   ) in player_query.iter() {
+            // Use the transform to get world position
+            let world_pos = transform.translation;
+            
+            // Get geographic coordinates and subpixel from the shared component
+            let geo_coords = planisphere.subpixel_to_geo(ijkpos.subpixel.0, ijkpos.subpixel.1, ijkpos.subpixel.2); // (lon, lat)
+            let subpixel: (usize, usize, usize) = ijkpos.subpixel;     // (i, j, k)
+            
+            // Use the new shared component for source identification
+            let source = "RAYCAST"; // or "PLAYER" if using a different method
+            
+            // Format the coordinate information into a readable display
+            let coordinate_text = format!(
+                "Player Position ({}):\n\
+                World: ({:.2}, {:.2}, {:.2})\n\
+                Geo: ({:.6}°, {:.6}°)\n\
+                Tile: ({}, {}, {})",
+                source,                                   // Show which method was used
+                world_pos.x, world_pos.y, world_pos.z,  // World coordinates with 2 decimal places
+                geo_coords.0, geo_coords.1,              // Geographic coordinates with 6 decimal places
+                subpixel.0, subpixel.1, subpixel.2       // Subpixel coordinates as integers
+            );
+            
+            // Update the text content
+            **text = coordinate_text;
+        }
+ 
     }
 }
