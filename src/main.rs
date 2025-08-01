@@ -162,7 +162,7 @@ fn main() {
         // Systems that run once at startup (world setup)
         .add_systems(Startup, (setup_third_person_camera)) // Setup camera, physics world, and UI
         .add_systems(Startup, (setup_physics, setup_ui))
-        .add_systems(Startup, setup_player)
+        .add_systems(Startup, (setup_object_templates, setup_player).chain())
         // Systems that run every frame (game loop) - split into groups to avoid tuple size limit
         .add_systems(Update, (
             //move_agents,                    // Update agent movement and behavior
@@ -231,7 +231,7 @@ fn setup_physics(
     terrain_center.max_subpixel_distance = terrain_config.recreation_threshold; // Sync with TerrainConfig
     terrain_center.last_recreation_time = -10.0; // Allow immediate recreation if needed
     
-    setup_object_templates(&mut commands, &asset_server)  ;  // Create the terrain using gnomonic projection with subpixel system - RECTANGULAR pattern
+    // setup_object_templates is now handled by Startup systems
 
     create_terrain_gnomonic_rectangular(
         &mut commands, 

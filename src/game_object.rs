@@ -1,6 +1,6 @@
 use std::num::NonZero;
 
-use bevy::ecs::world;
+use bevy::ecs::{spawn, world};
 use bevy::{prelude::*, scene};
 use bevy_rapier3d::prelude::*;
 use crate::player::{calculate_subpixel_center_world_position, Player, EntitySubpixelPosition};
@@ -53,6 +53,7 @@ pub struct ObjectTemplate {
     pub scene: Handle<Scene>,  // Use scene instead of mesh_parts
     pub y_offset: f32,
     pub scale: Vec3,
+    pub rotation_y: f32,  // Rotation around Y-axis in radians
     pub object_definition: ObjectDefinition, // Default definition for this template
 }
 
@@ -382,6 +383,8 @@ pub fn raycast_tile_locator_system(
 
 
 
+    
+    
 
 
 
@@ -408,7 +411,7 @@ pub fn spawn_mouse_tracker(
         material: None,
     };
 
-    let position = IntoWorldPosition::into_world_position(&world_pos, &planisphere, terrain_center);
+    let position = IntoWorldPosition::into_world_position(&world_pos, planisphere, terrain_center);
 
     let entity = spawn_unified_object(
         commands,
@@ -450,11 +453,19 @@ pub fn setup_player(
 ) {
     // Call the spawn_player function
     spawn_player(
-        commands, 
-        materials, 
-        planisphere, 
-        terrain_center, 
-        object_templates
+        &mut commands, 
+        &mut materials, 
+        &planisphere, 
+        &terrain_center, 
+        &object_templates
+    );
+
+    spawn_mouse_tracker(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        &planisphere,
+        &terrain_center,
     );
     
 
@@ -480,19 +491,16 @@ pub fn setup_player(
 
 
 pub fn spawn_player(
-    mut commands: Commands,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    planisphere: Res<crate::planisphere::Planisphere>,
-    terrain_center: ResMut<crate::terrain::TerrainCenter>,
-    object_templates: Res<ObjectTemplates>,
+    commands: &mut Commands,
+    materials: &mut ResMut<Assets<StandardMaterial>>,
+    planisphere: &crate::planisphere::Planisphere,
+    terrain_center: &crate::terrain::TerrainCenter,
+    object_templates: &ObjectTemplates,
 ) {
 
 
-    let raycast_tile_locator = RaycastTileLocator {
-        last_tile: None, // Initialize with no last tile
-    };
     // Build the bundle with the correct transform
-    let bundle = crate::player::PlayerBundle {
+    let player_bundle = crate::player::PlayerBundle {
         ..Default::default()
     };
     let physics_bundle = (
@@ -505,7 +513,6 @@ pub fn spawn_player(
         LockedAxes::ROTATION_LOCKED_X | LockedAxes::ROTATION_LOCKED_Z,
         ActiveEvents::COLLISION_EVENTS,
         ActiveCollisionTypes::all(),
-        raycast_tile_locator, // Attach the raycast tile locator
     );
 
 
@@ -514,18 +521,19 @@ pub fn spawn_player(
     let template = object_templates.robot.clone(); // Use the robot template for player
 
     let entity =spawn_template_scene(
-                    &mut commands,
-                    &mut materials,
-                    &planisphere,
-                    &terrain_center,
+                    commands,
+                    materials,
+                    planisphere,
+                    terrain_center,
                     &template,
                     Vec3::new(0.0, 10.0, 0.),
                     10.0, // Use player's Y position + offset
                     CollisionBehavior::Dynamic, // Set collision behavior to dynamic for dropped items
-                    (physics_bundle, 
+                    (
+                        player_bundle,
+                        physics_bundle, 
                         crate::game_object::RaycastTileLocator{last_tile: None}, 
                         crate::game_object::EntityInfoOverlay::default(),
-                        EntitySubpixelPosition::default(),
                     )
                 );
 
@@ -541,13 +549,14 @@ pub fn spawn_player(
 
 
 
-pub fn setup_object_templates(commands: &mut Commands, asset_server: &Res<AssetServer>)  {
+pub fn setup_object_templates(mut commands: Commands, asset_server: Res<AssetServer>)  {
     let object_templates = ObjectTemplates {
         tree: ObjectTemplate {
             name: "Tree".to_string(),
             scene: asset_server.load("meshes/tree1.glb#Scene0"),
             y_offset: 0.0,  // No manual offset needed!
             scale: Vec3::ONE,
+            rotation_y: 0.0,  // No rotation by default
             object_definition: ObjectDefinition {
                 position: ObjectPosition::WorldCoordinates(Vec3::ZERO), // Default position
                 shape: ObjectShape::Cube { size: Vec3::ONE }, // Default shape
@@ -562,10 +571,11 @@ pub fn setup_object_templates(commands: &mut Commands, asset_server: &Res<AssetS
             },
         },
         rock: ObjectTemplate {
-            name: "Tree".to_string(),
+            name: "Stone".to_string(),
             scene: asset_server.load("meshes/stone1.glb#Scene0"),
             y_offset: 0.0,  // No manual offset needed!
             scale: Vec3::ONE,
+            rotation_y: 0.0,  // No rotation by default
             object_definition: ObjectDefinition {
                 position: ObjectPosition::WorldCoordinates(Vec3::ZERO), // Default position
                 shape: ObjectShape::Cube { size: Vec3::ONE }, // Default shape
@@ -580,18 +590,19 @@ pub fn setup_object_templates(commands: &mut Commands, asset_server: &Res<AssetS
             },
         },
         robot: ObjectTemplate {
-            name: "Tree".to_string(),
+            name: "Player".to_string(),
             scene: asset_server.load("meshes/robot1.glb#Scene0"),
             y_offset: 0.0,  // No manual offset needed!
-            scale: Vec3::ONE,
+            scale: 0.04 * Vec3::ONE,
+            rotation_y: std::f32::consts::PI,  // 180 degrees in radians
             object_definition: ObjectDefinition {
                 position: ObjectPosition::WorldCoordinates(Vec3::ZERO), // Default position
                 shape: ObjectShape::Cube { size: Vec3::ONE }, // Default shape
                 color: Color::srgb(0.0, 1.0, 0.0), // Green color for trees
                 collision: CollisionBehavior::Dynamic,
                 existence_conditions: Some(ExistenceConditions::Always),
-                object_type: "Robot".to_string(),
-                scale: Vec3::ONE,
+                object_type: "Player".to_string(),
+                scale: 0.0001*Vec3::ONE,
                 y_offset: 0.0,
                 mesh: None, // No specific mesh for tracker
                 material: None, // No specific material for tracker
@@ -657,7 +668,7 @@ pub fn spawn_template_scene<Extra: Bundle, T: IntoWorldPosition>(
             collision,
             existence_conditions: Some(ExistenceConditions::Always),
             object_type: template.name.clone(),
-            scale: Vec3::ONE,
+            scale: template.scale,
             y_offset: 0.0,
             mesh: None,
             material: None,
@@ -674,7 +685,10 @@ pub fn spawn_template_scene<Extra: Bundle, T: IntoWorldPosition>(
             metallic: 0.0,
             ..default()
         })),
-        Transform::from_translation(Vec3::new(0.0, template.y_offset, 0.0)) * Transform::from_scale(template.scale),
+        Transform::from_translation(Vec3::new(0.0, template.y_offset, 0.0))
+            .with_scale(template.scale)
+            .with_rotation(Quat::from_rotation_y(template.rotation_y)),
+
     )).id();
 
     commands.entity(parent).add_child(part_entity);
