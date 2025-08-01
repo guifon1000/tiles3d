@@ -1,8 +1,6 @@
 use bevy::prelude::*;
 use bevy_rapier3d::prelude::*;
 use crate::planisphere::Planisphere;
-use crate::terrain::{ SubpixelPosition};
-use crate::game_object::ObjectDefinition;
 
 /// Component marker for collectible items scattered around the terrain
 #[derive(Component, Debug)]
@@ -17,7 +15,6 @@ pub struct Item {
 pub struct LandscapeElement {
     pub _element_type: String, // Type of element (e.g., "stone", "tree", "rock") (prefixed with _ to indicate intentionally unused)
     pub _color: Color,         // Color of the element (prefixed with _ to indicate intentionally unused)
-    pub subpixel_position: SubpixelPosition, // Subpixel position for terrain recreation
 }
 
 /// Level-of-Detail system for landscape elements
@@ -36,7 +33,6 @@ pub struct EnhancedLandscapeElement {
     pub _color: Color,                // Color (prefixed with _ to indicate intentionally unused)
     pub _scale: Vec3,                 // Scale (prefixed with _ to indicate intentionally unused)
     pub _distance_from_player: f32,   // Distance from player (prefixed with _ to indicate intentionally unused)
-    pub subpixel_position: SubpixelPosition, // Subpixel position for terrain recreation
 }
 
 /// Determine what type of landscape element should be placed based on RGBA values
@@ -183,7 +179,6 @@ pub fn create_landscape_elements(
                 LandscapeElement {
                     _element_type: element_type.clone(),
                     _color: element_color,
-                    subpixel_position: SubpixelPosition::new(i, j, k), // Track subpixel position for terrain recreation
                 },
                 DistanceLOD {
                     _high_detail_distance: 20.0,
@@ -191,7 +186,6 @@ pub fn create_landscape_elements(
                     low_detail_distance: 100.0,
                     cull_distance: 150.0,
                 },
-                crate::terrain::SubpixelPosition::new(i, j, k), // Track subpixel position for terrain recreation
             ));
             
             elements_created += 1;
@@ -301,7 +295,6 @@ pub fn create_items(
                 _value: item_value,
                 _color: item_color,
             },
-            crate::terrain::SubpixelPosition::new(i, j, k), // Track subpixel position for terrain recreation
         ));
         
         items_created += 1;

@@ -2,7 +2,7 @@
 use bevy::prelude::*;           // Bevy game engine core functionality
 use bevy_rapier3d::prelude::*;  // Physics engine for 3D collision detection
 use rand::Rng;                  // Random number generation for agent behavior
-use crate::terrain::{Tile, SubpixelPosition}; // Import Tile and SubpixelPosition components from terrain module
+use crate::terrain::Tile; // Import Tile and SubpixelPosition components from terrain module
 use crate::landscape::Item; // Import Item component from landscape module
 use crate::player::EntitySubpixelPosition; // Import shared positioning component
 use crate::planisphere; // Import planisphere for coordinate conversion
@@ -144,7 +144,7 @@ pub fn create_agents(
                 facing_angle: 0.0,               // Start facing forward (negative Z direction)
             },
             Inventory::default(),                // Start with empty inventory
-            SubpixelPosition::new(agent_i, agent_j, agent_k), // Agent's home position for respawning
+            
             EntitySubpixelPosition {             // NEW: Shared positioning component
                 subpixel: (agent_i, agent_j, agent_k),
                 geo_coords: (approx_lon, approx_lat),

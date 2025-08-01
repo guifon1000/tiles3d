@@ -1,4 +1,4 @@
-use std::marker;
+
 
 // use bevy::math::ops::sqrt;
 // Import statements - bring in code from other modules and crates
@@ -6,18 +6,16 @@ use bevy::prelude::*;           // Bevy game engine core functionality
 use bevy::window::PrimaryWindow;
 use bevy_rapier3d::prelude::*;  // Physics engine for 3D collision detection
 use bevy_rapier3d::plugin::context::systemparams::ReadRapierContext;
-use bevy::input::mouse::MouseMotion; use crate::player;
+use bevy::input::mouse::{MouseMotion, MouseButton}; 
+
 // Mouse movement events
-use crate::terrain::{self, RenderedSubpixels, Tile, TerrainCenter, SubpixelPosition}; // Import Tile component and resources from terrain module
+use crate::terrain::{RenderedSubpixels, Tile, TerrainCenter, entities_in_rendered_subpixels}; // Import Tile component and resources from terrain module
 use crate::landscape::Item; // Import Item from landscape module
-use crate::beacons::{PlayerTileBeacon}; // Import beacon components
-use crate::game_object::{ExistenceConditions, RaycastTileLocator};
+use crate::game_object::{RaycastTileLocator};
 // use crate::TerrainConfig;
-use crate::planisphere::{self, geo_to_gnomonic_helper}; // Import planisphere for coordinate conversion
-use crate::game_object::{despawn_unified_object_from_name, spawn_mousetracker_at_tile, spawn_mouse_tracker_at_world_position, 
-                        spawn_terraincenter_at_world_position, CollisionBehavior, 
-                        MouseTrackerObject, ObjectDefinition, ObjectPosition, ObjectShape,
-                        spawn_playertracker_at_tile, spawn_player}; // Import game object definitions
+use crate::planisphere::{self}; // Import planisphere for coordinate conversion
+use crate::game_object::{ObjectTemplate, CollisionBehavior, 
+                        spawn_template_scene, ObjectDefinition, ObjectTemplates, MouseTrackerObject}; // Import game object definitions
 // Note: Terrain configuration is now accessed via TerrainConfig resource instead of constants
 // use crate::agent::Agent; // Import Agent component for shared positioning
 
@@ -30,14 +28,12 @@ pub struct Player {
     pub facing_angle: f32,        // Float: current facing direction in radians (Y-axis rotation)
     pub mouse_sensitivity: f32,   // Float: how sensitive mouse movement is
     pub move_speed: f32,          // Float: how fast the player moves
-    pub mouse_ray_hit: ObjectDefinition, // NEW: Object definition for player
 }
 
 #[derive(Bundle)]
 pub struct PlayerBundle {
     pub player: Player,
     pub player_inventory: PlayerInventory,
-    pub player_raycast: PlayerRaycast,
     pub entity_position: EntitySubpixelPosition, // NEW: Shared positioning component
 }
 
@@ -51,30 +47,9 @@ impl Default for PlayerBundle {
                 mouse_sensitivity: 0.002,
                 move_speed: 15.0,
 
-                mouse_ray_hit: ObjectDefinition {
-                    position: ObjectPosition::WorldCoordinates(Vec3::new(0.0, 0.0, 0.0)),
-                    shape: ObjectShape::Sphere { radius: 0.1 },
 
-                    color: Color::srgb(1.0, 0.0, 0.0), // Red color for ray hit
-                    collision: CollisionBehavior::None,
-                    existence_conditions: Some(ExistenceConditions::OnFrame), // Exists for the current frame only
-                    object_type: "MouseTracker".to_string(),
-                    scale: Vec3::new(1.0, 1.0, 1.0),
-                    y_offset: 0.0,
-                    mesh: None, // No specific mesh for tracker
-                    material: None, // No specific material for tracker
-                },
             },
             player_inventory: PlayerInventory::default(),
-            player_raycast: PlayerRaycast {
-                range: 10.0,
-                hit_something: false,
-                hit_distance: 0.0,
-                hit_point: Vec3::ZERO,
-                hit_normal: Vec3::ZERO,
-                last_check_time: 0.0,
-                check_interval: 0.05,
-            },
             entity_position: EntitySubpixelPosition::default(), // NEW: Initialize shared positioning
         }
     }
@@ -90,19 +65,6 @@ pub struct PlayerSensor {
 #[derive(Component, Default, Debug)]
 pub struct PlayerInventory {
     pub items: Vec<String>,       // Vec<String> is a dynamic array of text strings
-}
-
-/// Raycast Component - Handles raycasting for the player
-/// This component allows the player to detect terrain and objects in their path
-#[derive(Component)]
-pub struct PlayerRaycast {
-    pub range: f32,               // Maximum distance to cast the ray
-    pub hit_something: bool,      // Whether the last raycast hit something
-    pub hit_distance: f32,        // Distance to the hit point
-    pub hit_point: Vec3,          // World coordinates of the hit point
-    pub hit_normal: Vec3,         // Normal vector at the hit point
-    pub last_check_time: f32,     // Time of last raycast check
-    pub check_interval: f32,      // How often to perform raycasts (in seconds)
 }
 
 /// Marker component for the ray intersection visualization sphere
@@ -137,33 +99,64 @@ impl Default for EntitySubpixelPosition {
     }
 }
 
+pub fn detect_mouse_clicks(
+    mut commands: Commands,
+    materials: ResMut<Assets<StandardMaterial>>,
+    object_templates: Res<ObjectTemplates>,
+    mousetracker_query: Query<(Entity, &Transform, &EntitySubpixelPosition),
+        With<MouseTrackerObject>>,
+    player_query: Query<(Entity, &Transform, &EntitySubpixelPosition), With<Player>>,
+    planisphere: Res<planisphere::Planisphere>,
+    terrain_center: Res<TerrainCenter>,
+    // Add mouse button input resource to detect clicks
+    mouse_button_input: Res<ButtonInput<MouseButton>>,
+) {
+    // Check for left mouse button press
+    if mouse_button_input.just_pressed(MouseButton::Left) {
+        println!("Left mouse button was clicked!");
+        drop_stone(
+            commands, 
+            materials, 
+            &object_templates.rock, // Use rock template for stone
+            mousetracker_query, 
+            player_query,
+            planisphere, 
+            terrain_center
+        );
+        // Your left click action code here
+    }
+    
+    // Check for right mouse button press
+    if mouse_button_input.just_pressed(MouseButton::Right) {
+        println!("Right mouse button was clicked!");
+        // Your right click action code here
+    }
+    
+    // You can also check for:
+    // - mouse_button_input.just_released(MouseButton::Left)
+    // - mouse_button_input.pressed(MouseButton::Left) - true as long as the button is held down
+}
+
+
+
+
 
 
 pub fn cast_ray_from_camera(
+    //commands: &mut Commands,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform)>,
     rapier_context: ReadRapierContext,
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    marker_query: Query<Entity, With<RayIntersectionMarker>>,
-    object_query: Query<(Entity, &ObjectDefinition)>,
-
-    // subpixel_marker_query removed - using only triangle mapping
-    triangle_marker_query: Query<Entity, With<TriangleSubpixelMarker>>,
-    planisphere: Res<crate::planisphere::Planisphere>,
-    terrain_center: Res<TerrainCenter>,
-    triangle_mapping: Res<crate::terrain::TriangleSubpixelMapping>,
-    terrain_entities: Query<Entity, With<crate::terrain::Tile>>,
-) {
-    let Ok(window) = windows.single() else { return; };
-    let Ok((camera, camera_transform)) = cameras.single() else { return; };
-
+    mut mouse_tracker_query: Query<(Entity, &mut Transform), With<MouseTrackerObject>>,
+){
+    let Ok(window) = windows.single() else { return ; };
+    let Ok((camera, camera_transform)) = cameras.single() else { return ; };
+    let mut hit_point = Vec3::ZERO; // Default hit point if no intersection occurs
     if let Some(cursor_position) = window.cursor_position() {
         // Create a ray from the camera to the cursor position
         if let Ok(ray) = camera.viewport_to_world(camera_transform, cursor_position) {
             // Get the rapier context
-            let Ok(ctx) = rapier_context.single() else { return; };
+            let Ok(ctx) = rapier_context.single() else { return ; };
             
             // Perform physics raycast
             let max_distance = 100.0;
@@ -180,149 +173,92 @@ pub fn cast_ray_from_camera(
                 filter,
             ) {
                 // Calculate hit point
-                let hit_point = ray.origin + *ray.direction * ray_intersection.time_of_impact;
-                
-                // Get triangle index and other intersection details
-                let feature_info = format!("{:?}", ray_intersection.feature);
-                let triangle_index = match &ray_intersection.feature {
-                    _f if feature_info.contains("Face") => {
-                        // Extract the numeric ID from the debug string
-                        feature_info.chars()
-                            .filter(|c| c.is_ascii_digit())
-                            .collect::<String>()
-                            .parse::<u32>()
-                            .unwrap_or(0)
-                    },
-                    _ => 0,
-                };
-                let normal = ray_intersection.normal;
-                
-                // Debug: Show entity and triangle relationship
-                let _terrain_count = terrain_entities.iter().count();
-                let is_terrain_entity = terrain_entities.contains(entity);
-                // eprintln!("from camera raycast: Hit entity {:?} (is_terrain: {}), triangle index {}, mapping size {}, terrain entities: {}", 
-                //     entity, is_terrain_entity, triangle_index, triangle_mapping.triangle_to_subpixel.len(), terrain_count);
-                
-                // Additional debug info for offset detection
-                if is_terrain_entity {
-                    let mapping_size = triangle_mapping.triangle_to_subpixel.len() as u32;
-                    if triangle_index >= mapping_size {
-                        let multiple = triangle_index / mapping_size;
-                        let remainder = triangle_index % mapping_size;
-                        //println!("INDEX ANALYSIS: {} = {}×{} + {} (multiple of mapping size + remainder)", 
-                        //    triangle_index, multiple, mapping_size, remainder);
-                    } else {
-                       // println!("INDEX OK: {} is within bounds [0, {})", triangle_index, mapping_size);
-                    }
-                }
-                // Remove existing markers if they exist
-                for (entity, def) in object_query.iter() {
-                    if def.object_type.contains("MouseTracker") {
-                        commands.entity(entity).despawn();
-                    }
-                }
-
-                // Remove existing markers if they exist
-                for marker_entity in marker_query.iter() {
-                    commands.entity(marker_entity).despawn();
-                }
-                // subpixel_marker_query removed - using only triangle mapping
-                for marker_entity in triangle_marker_query.iter() {
-                    commands.entity(marker_entity).despawn();
-                }
-                
-                // Spawn new intersection marker (red sphere)
-
-                spawn_mouse_tracker_at_world_position(&mut commands, &mut meshes, &mut materials, Some(&planisphere), &terrain_center, hit_point);
-                // Find closest subpixel to the hit point
-                let closest_subpixel = find_closest_subpixel_to_world_point(
-                    hit_point,
-                    &planisphere,
-                    &terrain_center,
-                );
-                
-                if let Some((i, j, k)) = closest_subpixel {
-                    // Calculate the center of this subpixel in world coordinates
-                    // Blue marker removed - relying only on triangle mapping for accuracy
-                    
-                    // Try to get the subpixel from triangle mapping first
-                    let mut triangle_subpixel_found = false;
-                    
-                    // CRITICAL: Detect and correct triangle index offset between Bevy mesh and Rapier collision
-                    let adjusted_triangle_index = if is_terrain_entity {
-                        // Check if triangle index is out of bounds (indicates offset)
-                        if triangle_index >= triangle_mapping.triangle_to_subpixel.len() as u32 {
-                            // Dynamic offset detection: find the correct offset
-                            let mapping_size = triangle_mapping.triangle_to_subpixel.len() as u32;
-                            let potential_offset = (triangle_index / mapping_size) * mapping_size;
-                            let corrected_index = triangle_index - potential_offset;
-                            
-                            //println!("OFFSET DETECTED: Triangle index {} is out of bounds (mapping size: {})", triangle_index, mapping_size);
-                            //println!("Calculated offset: {}, Corrected index: {} -> {}", potential_offset, triangle_index, corrected_index);
-                            
-                            // Validate the corrected index is within bounds
-                            if corrected_index < mapping_size {
-                                corrected_index
-                            } else {
-                                println!("ERROR: Even after offset correction, index {} is still out of bounds!", corrected_index);
-                                triangle_index // Use original if correction fails
-                            }
-                        } else {
-                            triangle_index // Index is within bounds, use as-is
-                        }
-                    } else {
-                        triangle_index // Non-terrain entity, use index directly
-                    };
-                    
-                    // Check if triangle mapping is stale (from different terrain center)
-                    let mapping_terrain_center_mismatch = 
-                        (triangle_mapping.terrain_center_lon - terrain_center.longitude).abs() > 0.000001 ||
-                        (triangle_mapping.terrain_center_lat - terrain_center.latitude).abs() > 0.000001;
-                    
-                    if mapping_terrain_center_mismatch {
-                        println!("WARNING: Triangle mapping is stale! Mapping center: ({:.6}, {:.6}), Current center: ({:.6}, {:.6})",
-                            triangle_mapping.terrain_center_lon, triangle_mapping.terrain_center_lat,
-                            terrain_center.longitude, terrain_center.latitude);
-                        println!("Using current terrain center for coordinate conversion to fix drift issue");
-                    }
-                    
-                    if let Some(triangle_subpixel) = triangle_mapping.triangle_to_subpixel.get(adjusted_triangle_index as usize) {
-                        let (tri_i, tri_j, tri_k) = *triangle_subpixel;
-                        spawn_mousetracker_at_tile(&mut commands, &mut meshes, &mut materials, Some(&planisphere), &terrain_center, tri_i as usize, tri_j as usize, tri_k as usize);
-                       
-                        
-                        //println!("Ray hit entity {:?} at position {:.2?} (distance: {:.2})", entity, hit_point, ray_intersection.time_of_impact);
-                        //println!("Feature: {}, Triangle/Feature index: {} -> {}, Normal: {:.2?}", feature_info, triangle_index, adjusted_triangle_index, normal);
-                        //println!("Triangle's subpixel: ({}, {}, {}) at world position {:.2?}", tri_i, tri_j, tri_k, triangle_subpixel_center);
-                        //println!("Terrain center: ({:.2}, {:.2}), Mapping timestamp: {:.2}", terrain_center.center_lon, terrain_center.center_lat, triangle_mapping.mesh_generation_time);
-                        triangle_subpixel_found = true;
-                    }
-                    
-                    // Removed fallback - relying exclusively on triangle mapping for accuracy
-                    if !triangle_subpixel_found {
-                        //println!("Ray hit entity {:?} at position {:.2?} (distance: {:.2})", entity, hit_point, ray_intersection.time_of_impact);
-                        //println!("Feature: {}, Triangle/Feature index: {}, Normal: {:.2?}", feature_info, triangle_index, normal);
-                        //println!("Triangle mapping failed - no green marker will be shown");
-                    }
-                    
-                    //println!("Closest subpixel: ({}, {}, {}) at world position Vec3({:.2}, {:.2}, {:.2})", i, j, k, 
-                    //    calculate_subpixel_center_world_position(i, j, k, &planisphere, &terrain_center).x,
-                    //    calculate_subpixel_center_world_position(i, j, k, &planisphere, &terrain_center).y,
-                    //    calculate_subpixel_center_world_position(i, j, k, &planisphere, &terrain_center).z);
-                }
-            } else {
-                // No hit - remove existing markers
-                for marker_entity in marker_query.iter() {
-                    commands.entity(marker_entity).despawn();
-                }
-                // subpixel_marker_query removed - using only triangle mapping
-                for marker_entity in triangle_marker_query.iter() {
-                    commands.entity(marker_entity).despawn();
-                }
+                hit_point = ray.origin + *ray.direction * ray_intersection.time_of_impact;
             }
         }
     }
+    for (marker_entity, mut transform) in mouse_tracker_query.iter_mut() {
+        // Reset the mouse tracker position to the raycast hit point
+        transform.translation = hit_point;
+        eprint!("Mouse tracker position updated to: ({:.2}, {:.2}, {:.2})\n", 
+            transform.translation.x, transform.translation.y, transform.translation.z);
+    }
 }
+
+pub fn drop_stone(
+    mut commands: Commands,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+        template: &ObjectTemplate,
+        mousetracker_query: Query<(Entity, &Transform, &EntitySubpixelPosition), With<MouseTrackerObject>>,
+        player_query: Query<(Entity, &Transform, &EntitySubpixelPosition), With<Player>>,
+        planisphere: Res<planisphere::Planisphere>,
+        terrain_center: Res<TerrainCenter>,
+    )
+    {   for (player_entity, player_transform, player_ijkpos) in player_query.iter() {
+            for (mousetracker_entity, mousetracker_transform, mousetracker_ijkpos) in mousetracker_query.iter() {
+                // Get the subpixel coordinates from the mouse tracker
+                let mousetracker_subpixel = mousetracker_ijkpos.subpixel;
+                let player_subpixel = player_ijkpos.subpixel;
+                // Calculate the world position of the subpixel center
+                let mousetracker_world_pos = calculate_subpixel_center_world_position(
+                    mousetracker_subpixel.0 as i32, 
+                    mousetracker_subpixel.1 as i32, 
+                    mousetracker_subpixel.2 as i32, 
+                    &planisphere, 
+                    &terrain_center
+                );
+                let player_world_pos = calculate_subpixel_center_world_position(
+                    player_subpixel.0 as i32, 
+                    player_subpixel.1 as i32, 
+                    player_subpixel.2 as i32, 
+                    &planisphere, 
+                    &terrain_center
+                );
+                let player_to_target = Vec3::new(
+                    mousetracker_world_pos.x - player_world_pos.x,
+                    0.0, // Keep Y at 0 for ground level
+                    mousetracker_world_pos.z - player_world_pos.z,
+                );
+                let distance = player_to_target.length();
+                let force = 13.0;
+                let dmax = 10.0; // Maximum distance for the stone to be thrown
+                let velocity = Velocity {
+                    linvel: player_to_target.normalize() * 0.67 * force + 0.33  * force * Vec3::Y, // Adjust speed as needed
+                    angvel: Vec3::ZERO,
+                };
+                let physics_bundle = (
+                    RigidBody::Dynamic,
+                    crate::game_object::create_collider_from_shape(&crate::game_object::ObjectShape::Cube { size: Vec3::ONE }),
+                    velocity,
+                    ExternalImpulse::default(),
+                    GravityScale(1.0),
+                    Damping { linear_damping: 0.0, angular_damping: 0.1 },
+                    //None, //LockedAxes::default() | LockedAxes::default(),
+                    //LockedAxes::default()
+                    ActiveEvents::COLLISION_EVENTS,
+                    ActiveCollisionTypes::all(),
+                    );
+                // Spawn a stone at the mouse tracker position
+                spawn_template_scene(
+                    &mut commands,
+                    &mut materials,
+                    &planisphere,
+                    &terrain_center,
+                    template,
+                    player_transform.translation + player_to_target * 0.5, // Position it halfway between player and mouse tracker
+                    player_transform.translation.y + template.y_offset, // Use player's Y position + offset
+                    CollisionBehavior::Dynamic, // Set collision behavior to dynamic for dropped items
+                    (physics_bundle, 
+                        crate::game_object::RaycastTileLocator{last_tile: None}, 
+                        crate::game_object::EntityInfoOverlay::default(),
+                        EntitySubpixelPosition::default(),
+                    )
+                );
+            }
+        }
+}
+
+
 
 pub fn calculate_subpixel_center_world_position(
     i: i32, 
@@ -375,77 +311,6 @@ fn find_closest_subpixel_to_world_point(
     Some((i as i32, j as i32, k as i32))
 }
 
-pub fn create_player0(
-    commands: &mut Commands,                              // Commands let us spawn/despawn entities
-    meshes: &mut ResMut<Assets<Mesh>>,                   // Collection of 3D meshes (shapes)
-    materials: &mut ResMut<Assets<StandardMaterial>>,    // Collection of materials (colors/textures)   
-    planisphere: &crate::planisphere::Planisphere,
-    terrain_center: &crate::terrain::TerrainCenter,
-) -> Entity {
-    spawn_player(
-        commands, 
-        meshes, 
-        materials, 
-        Some(planisphere),
-        terrain_center,
-    )
-
-}
-
-
-
-
-
-
-/// Function to create the player entity in the game world
-pub fn create_player(
-    commands: &mut Commands,                              // Commands let us spawn/despawn entities
-    meshes: &mut ResMut<Assets<Mesh>>,                   // Collection of 3D meshes (shapes)
-    materials: &mut ResMut<Assets<StandardMaterial>>,    // Collection of materials (colors/textures)   
-    planisphere: &crate::planisphere::Planisphere,
-    terrain_center: &crate::terrain::TerrainCenter,
-) -> Entity {
-
-  
-    
-    spawn_player(
-        commands, 
-        meshes, 
-        materials,
-        Some(planisphere),
-        terrain_center, 
-    )
-}
-
-pub fn check_update_terrain_center(
-    mut commands: Commands,
-    mut player_query: Query<(Entity, &Transform, &mut EntitySubpixelPosition), With<RaycastTileLocator>>,
-    planisphere: Res<crate::planisphere::Planisphere>,
-    terrain_center: Res<TerrainCenter>, // Current terrain center resource
-) {
-    eprintln!("Checking if terrain center needs updating...");
-        // Update player raycast component with new terrain center
-        for (entity, transform, mut subpixel_position) in player_query.iter_mut() {
-            let player_world_x = transform.translation.x;
-            let player_world_z = transform.translation.z;
-            let (terrain_center_world_x, terrain_center_world_y) = crate::planisphere::geo_to_gnomonic_helper(
-                                terrain_center.longitude, 
-                                terrain_center.latitude, 
-                                terrain_center.longitude, 
-                                terrain_center.latitude, 
-                                &planisphere
-                            );
-            let square_distance_to_terrain_center = (terrain_center_world_x - player_world_x as f64).powi(2) + (terrain_center_world_y - player_world_z as f64).powi(2);
-            let distance_to_terrain_center = square_distance_to_terrain_center.sqrt() as f64;
-            //let distance_in_tiles = (manhattan_distance_world / mean_tile_size.max(0.001)) as usize;
-            let distance_in_tiles = (distance_to_terrain_center / planisphere.mean_tile_size.max(0.001) as f64) as usize;
-        eprintln!("Distance to terrain center: {:.6} tiles", distance_in_tiles);       
-    }
-        
-}
-
-
-
 
 
 
@@ -455,14 +320,14 @@ pub fn move_player(
     time: Res<Time>,                                    // Bevy's time resource
     keyboard_input: Res<ButtonInput<KeyCode>>,         // Keyboard input state
     mut mouse_motion: EventReader<MouseMotion>,        // Mouse movement events
-    mut query: Query<(&mut ExternalImpulse, &mut Transform, &mut Player, &mut Velocity, &PlayerRaycast)>,
+    mut query: Query<(&mut ExternalImpulse, &mut Transform, &mut Player, &mut Velocity)>,
 ) {
     // Removed map_boundary - player can move freely
     let current_time = time.elapsed_secs();            // How many seconds since the game started
     let _delta_time = time.delta_secs();                // Time since last frame
     
     // Process the player entity
-    for (_impulse, mut transform, mut player, mut velocity, raycast) in query.iter_mut() {
+    for (_impulse, mut transform, mut player, mut velocity) in query.iter_mut() {
         
         // MOUSE LOOK - Update facing direction based on mouse movement
         for motion in mouse_motion.read() {
@@ -480,7 +345,7 @@ pub fn move_player(
             velocity.linvel.y = jump_y;  // Set upward velocity
             player.next_jump_time = current_time + 0.5;  // 0.5 second jump cooldown
             player.is_grounded = false;  // Player is now airborne
-            println!("Player jumped!");
+            //println!("Player jumped!");
         }
         
         //if player.is_grounded {
@@ -504,47 +369,17 @@ pub fn move_player(
             
             // STRAFE LEFT/RIGHT MOVEMENT
             if keyboard_input.pressed(KeyCode::KeyA) {
-                println!("Strafe left pressed!");
+                //println!("Strafe left pressed!");
                 movement -= right_dir * player.move_speed;  // Strafe left
             }
             if keyboard_input.pressed(KeyCode::KeyD) {
-                println!("Strafe right pressed!");
+                //println!("Strafe right pressed!");
                 movement += right_dir * player.move_speed;  // Strafe right
             }
-            
-            // Apply movement if any keys are pressed
-            if movement != Vec3::ZERO {
-                // Check if we're about to hit something close ahead
-                let movement_modifier = if raycast.hit_something && raycast.hit_distance < 2.0 {
-                    // Slow down significantly when very close to an obstacle
-                    0.3
-                } else if raycast.hit_something && raycast.hit_distance < 4.0 {
-                    // Slow down moderately when approaching an obstacle
-                    0.6
-                } else {
-                    // Normal movement speed
-                    1.0
-                };
-                
-                // Apply movement by setting velocity with obstacle avoidance
-                velocity.linvel.x = movement.x * movement_modifier;
-                velocity.linvel.z = movement.z * movement_modifier;
-                
-                // Optional: Print warning when close to obstacles
-                if raycast.hit_something && raycast.hit_distance < 2.0 {
-                    println!("Warning: Obstacle detected at {:.2} units ahead!", raycast.hit_distance);
-                }
-            } else {
-                // Stop horizontal movement when no keys are pressed
-                velocity.linvel.x = 0.0;
-                velocity.linvel.z = 0.0;
-            }
-        } else {
-            // AIRBORNE BEHAVIOR (when jumping or falling)
-            // Allow some air control but reduce horizontal velocity
-            velocity.linvel.x *= 0.98;
-            velocity.linvel.z *= 0.98;
-        }
+            velocity.linvel.x = movement.x;
+            velocity.linvel.z = movement.z;
+           
+        } 
     }
 }
 
@@ -601,13 +436,13 @@ pub fn check_player_ground_sensors(
                 if let Ok(mut player) = player_query.get_mut(*entity1) {
                     if tile_query.get(*entity2).is_ok() || landscape_query.get(*entity2).is_ok() {
                         player.is_grounded = true;
-                        println!("Player became grounded!");
+                        //println!("Player became grounded!");
                     }
                 } else if let Ok(mut player) = player_query.get_mut(*entity2) {
                     // Check the opposite order: entity2 is player, entity1 is ground
                     if tile_query.get(*entity1).is_ok() || landscape_query.get(*entity1).is_ok() {
                         player.is_grounded = true;
-                        println!("Player became grounded!");
+                        //println!("Player became grounded!");
                     }
                 }
             },
@@ -616,12 +451,12 @@ pub fn check_player_ground_sensors(
                 if let Ok(mut player) = player_query.get_mut(*entity1) {
                     if tile_query.get(*entity2).is_ok() || landscape_query.get(*entity2).is_ok() {
                         player.is_grounded = false;
-                        println!("Player became airborne!");
+                        //println!("Player became airborne!");
                     }
                 } else if let Ok(mut player) = player_query.get_mut(*entity2) {
                     if tile_query.get(*entity1).is_ok() || landscape_query.get(*entity1).is_ok() {
                         player.is_grounded = false;
-                        println!("Player became airborne!");
+                        //println!("Player became airborne!");
                     }
                 }
             }
@@ -629,34 +464,6 @@ pub fn check_player_ground_sensors(
     }
 }
 
-/// Shared resource to store player's current subpixel position in the planisphere grid
-/// This resource is used to track the player's position across different coordinate systems:
-/// - Subpixel coordinates (I, J, K) in the planisphere grid
-/// - Geographic coordinates (longitude, latitude) on the planet surface  
-/// - World coordinates (X, Y, Z) in the 3D game space
-#[derive(Resource)]
-pub struct PlayerSubpixelPosition {
-    /// Current subpixel position as (I, J, K) coordinates in planisphere grid
-    pub subpixel: (usize, usize, usize),
-    /// Geographic coordinates as (longitude, latitude) in degrees
-    pub geo_coords: (f64, f64),
-    /// Current world position in 3D game space
-    pub world_pos: Vec3,
-    /// Previous subpixel position - used to detect when player moves to new tile for beacon updates
-    pub previous_subpixel: (usize, usize, usize),
-}
-
-
-impl Default for PlayerSubpixelPosition {
-    fn default() -> Self {
-        Self {
-            subpixel: (1500, 750, 0), // Default to center
-            geo_coords: (0.0, 0.0),
-            world_pos: Vec3::ZERO,
-            previous_subpixel: (1500, 750, 0), // Start with same as current
-        }
-    }
-}
 
 
 
@@ -664,301 +471,25 @@ impl Default for PlayerSubpixelPosition {
 
 
 
-/// System to track player's subpixel coordinates using direct world coordinate search
-/// 
-/// This system continuously updates the PlayerSubpixelPosition resource by:
-/// 1. Getting the player's current world position
-/// 2. Converting nearby subpixels to world coordinates using gnomonic projection
-/// 3. Finding which subpixel bounds contain the player position
-/// 4. Updating the resource with subpixel coordinates, geographic coordinates, and world position
-///
-/// The system uses the current terrain center from TerrainCenter resource to ensure
-/// coordinate calculations remain synchronized after terrain recreation.
-/// UNIFIED: Track entity positions using vertical raycast (works for players and agents)
-pub fn track_entities_subpixel_position_raycast(
-    // Query both players and agents with the shared positioning component
-    mut entity_query: Query<(Entity, &Transform, &mut EntitySubpixelPosition), Or<(With<Player>, With<crate::agent::Agent>)>>,
-    // Separate queries to check entity types
-    player_query: Query<&Player>,
-    agent_query: Query<&crate::agent::Agent>,
-    // Additional queries for player-specific actions
-    mut player_subpixel: ResMut<PlayerSubpixelPosition>,
-    _player_transform_query: Query<&mut Transform, (With<Player>, Without<EntitySubpixelPosition>)>,
-    // Query to update player's SubpixelPosition component for terrain recreation
-    mut player_basic_subpixel_query: Query<&mut crate::terrain::SubpixelPosition, (With<Player>, Without<crate::agent::Agent>)>,
-    // Query for beacon updates
-    mut beacon_query: Query<&mut Transform, (With<PlayerTileBeacon>, Without<Player>, Without<EntitySubpixelPosition>)>,
-    rapier_context: ReadRapierContext,
-    terrain_center: Res<TerrainCenter>,
+
+
+
+
+
+pub fn entity_replacement_system(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut rendered_subpixels: ResMut<RenderedSubpixels>,
+    object_query : Query<(Entity, &mut Transform,  &ObjectDefinition), (Without<Player>, Without<MouseTrackerObject>)>,
+
+    terrain_center: ResMut<TerrainCenter>,
     planisphere: Res<planisphere::Planisphere>,
-
-    triangle_mapping: Res<crate::terrain::TriangleSubpixelMapping>,
-    terrain_entities: Query<Entity, With<crate::terrain::Tile>>,
-    time: Res<Time>,
+    object_templates: Res<ObjectTemplates>,
 ) {
-    let current_time = time.elapsed_secs();
-    
-
-    for (entity_id, transform, mut entity_position) in entity_query.iter_mut() {
-
-        // Throttle raycasting - only raycast every 0.1 seconds to prevent per-frame execution
-        if entity_position.last_raycast_time > 0.0 && 
-           current_time - entity_position.last_raycast_time < 0.1 {
-            continue;
-        }
-
-        // eprintln!("RAYCASTING MOVING ENTITY ID: {:?}", entity_id);
-        
-        // Check if this entity is a player or agent
-        let is_player = player_query.get(entity_id).is_ok();
-        let is_agent = agent_query.get(entity_id).is_ok();
-        
-        if is_player {
-            // This is the player entity
-            // println!("Found player entity: {:?}", entity_id);
-            
-            // Player-specific actions when detected in raycast:
-            
-            // 1. Update global player subpixel position resource
-            // This maintains compatibility with existing systems that use PlayerSubpixelPosition
-            if entity_position.subpixel != player_subpixel.subpixel {
-                player_subpixel.previous_subpixel = player_subpixel.subpixel;
-                player_subpixel.subpixel = entity_position.subpixel;
-                player_subpixel.geo_coords = entity_position.geo_coords;
-                player_subpixel.world_pos = entity_position.world_pos;
-                println!("Updated global player subpixel position: ({}, {}, {})", 
-                         entity_position.subpixel.0, entity_position.subpixel.1, entity_position.subpixel.2);
-                         
-                // Also update the basic SubpixelPosition component for terrain recreation repositioning
-                if let Ok(mut basic_subpixel) = player_basic_subpixel_query.single_mut() {
-                    basic_subpixel.i = entity_position.subpixel.0;
-                    basic_subpixel.j = entity_position.subpixel.1;
-                    basic_subpixel.k = entity_position.subpixel.2;
-                    println!("  -> Also updated basic SubpixelPosition component for terrain recreation");
-                }
-            }
-            
-            // 2. Trigger player-specific events or state changes
-            // For example, you could:
-            // - Play footstep sounds based on terrain type
-            // - Update player UI with current location
-            // - Trigger environmental effects
-            // - Log player movement for analytics
-            
-            // 3. Enhanced position tracking for the player
-            // The player gets more detailed tracking compared to agents
-            //println!("Player precise position: World({:.2}, {:.2}, {:.2}), Geo({:.6}, {:.6})", 
-            //         entity_position.world_pos.x, entity_position.world_pos.y, entity_position.world_pos.z,
-            //         entity_position.geo_coords.0, entity_position.geo_coords.1);
-
-        } else if is_agent {
-            // This is an Agent entity
-            println!("Found agent entity: {:?}", entity_id);
-            
-            // Agent-specific actions when detected in raycast:
-            // - Update AI navigation targets
-            // - Trigger agent state changes
-            // - Handle agent-specific positioning logic
-            println!("Agent position updated: ({}, {}, {})", 
-                     entity_position.subpixel.0, entity_position.subpixel.1, entity_position.subpixel.2);
-        }
-        let entity_pos = transform.translation;
-        
-        // Throttle raycasting to avoid performance issues (every 0.1 seconds)
-        // Skip throttling on first run (when last_raycast_time is 0.0)
-        //if entity_position.last_raycast_time > 0.0 && current_time - entity_position.last_raycast_time < 0.1 {
-        //    continue;
-        //}
-        
-        // Create vertical ray from entity position downward
-        // FIX: Use entity position but shoot from higher up with longer range
-
-
-        let ray_direction = Vec3::new(0.0, -1.0, 0.0); // Straight down
-        let ray_origin = Vec3::new(transform.translation.x, 100.0,
-            transform.translation.z);
-       // Get the rapier context
-       let Ok(ctx) = rapier_context.single() else { continue; };
-
-       // Perform vertical raycast to ground
-        let max_distance = 400.0; // Look down 400m max to ensure we hit terrain
-        let solid = true;
-        // Use multiple raycasts to get past entity colliders
-        let filter = QueryFilter::new().exclude_rigid_body(entity_id);
-        // eprintln!("for entity {:?} (ID: {:?})", entity_position, entity_id);
-        // eprintln!("RAYCASTING PLAYER ({:.2}, {:.2}, {:.2}) downwards", ray_origin.x, ray_origin.y, ray_origin.z);
-        
-        // Keep raycasting through non-terrain entities until we hit terrain
-        let mut current_ray_origin = ray_origin;
-        let mut remaining_distance = max_distance;
-        
-        for _attempt in 0..5 { // Reduced attempts from 20 to 5 to prevent infinite loops
-            if let Some((entity, ray_intersection)) = ctx.cast_ray_and_get_normal(
-                current_ray_origin,
-                ray_direction,
-                remaining_distance,
-                solid,
-                filter,
-            ) {
-                // eprintln!("RAYCASTING PLAYER Attempt {}: Hit entity {:?} at distance {:.2}", attempt + 1, entity, ray_intersection.time_of_impact);
-                
-                // Check if this entity has a Tile component (is terrain)
-                if terrain_entities.contains(entity) {
-                    // eprintln!("RAYCASTING PLAYER Found terrain entity {:?} after {} attempts", entity, attempt + 1);
-                // Extract triangle index from physics feature (same method as green marker)
-                let feature_info = format!("{:?}", ray_intersection.feature);                  
-                //eprintln!("RAYCASTING PLAYER Feature: {}", feature_info);
-                let triangle_index = match &ray_intersection.feature {      
-
-                    _f if feature_info.contains("Face") => {
-                        // Extract the numeric ID from the debug string
-                        feature_info.chars()
-                            .filter(|c| c.is_ascii_digit())
-                            .collect::<String>()
-                            .parse::<u32>()
-                            .unwrap_or(0)
-                    },
-                    _ => {
-                        continue; // Skip non-triangle hits
-                    }
-                };
-                // Apply same offset detection as green marker
-                let adjusted_triangle_index = if triangle_index >= triangle_mapping.triangle_to_subpixel.len() as u32 {
-                    let mapping_size = triangle_mapping.triangle_to_subpixel.len() as u32;
-                    let potential_offset = (triangle_index / mapping_size) * mapping_size;
-                    let corrected_index = triangle_index - potential_offset;
-                    
-                    if corrected_index < mapping_size {
-                        corrected_index
-                    } else {
-                        triangle_index
-                    }
-                } else {
-                    triangle_index
-                };
-                
-                // Check if triangle mapping is stale (from different terrain center)
-                let mapping_terrain_center_mismatch = 
-                    (triangle_mapping.terrain_center_lon - terrain_center.longitude).abs() > 0.000001 ||
-                    (triangle_mapping.terrain_center_lat - terrain_center.latitude).abs() > 0.000001;
-                
-                if mapping_terrain_center_mismatch {
-                    // eprintln!("WARNING: Triangle mapping is stale! Mapping center: ({:.6}, {:.6}), Current center: ({:.6}, {:.6})",
-                    //     triangle_mapping.terrain_center_lon, triangle_mapping.terrain_center_lat,
-                    //     terrain_center.center_lon, terrain_center.center_lat);
-                    // eprintln!("Skipping raycast until triangle mapping is updated");
-                    continue;
-                }
-                
-                // Get subpixel from triangle mapping
-                if let Some(&(i, j, k)) = triangle_mapping.triangle_to_subpixel.get(adjusted_triangle_index as usize) {
-                    //eprintln!("RAYCASTING PLAYER Triangle index: {} -> {}", triangle_index, adjusted_triangle_index);
-                    let new_subpixel = (i, j, k);
-
-                    // Update entity position using raycast result
-                    if new_subpixel != entity_position.subpixel {
-                        let (lon, lat) = planisphere.subpixel_to_geo(i, j, k);
-                        
-                        entity_position.previous_subpixel = entity_position.subpixel;
-                        entity_position.subpixel = new_subpixel;
-                        entity_position.geo_coords = (lon, lat);
-                        entity_position.world_pos = entity_pos;
-                        entity_position.last_raycast_time = current_time;
-                        
-                        //println!("RAYCAST Entity subpixel: triangle {}", adjusted_triangle_index);
-                        
-                        // If this is a player, check distance from terrain center and update beacon
-                        if is_player {
-                            eprintln!("RAYCASTING PLAYER: Entity {:?} hit terrain tile at subpixel ({}, {}, {}) with geo coords ({:.6}, {:.6})",
-                                     entity_id, i, j, k, lon, lat);
-                            // Calculate Manhattan distance in world coordinates
-                            let player_world_x = entity_pos.x;
-                            let player_world_z = entity_pos.z;
-                            let (terrain_center_world_x, terrain_center_world_y) = crate::planisphere::geo_to_gnomonic_helper(
-                                terrain_center.longitude, 
-                                terrain_center.latitude, 
-                                terrain_center.longitude, 
-                                terrain_center.latitude, 
-                                &planisphere
-                            );
-                            
-                            //let manhattan_distance_world = (player_world_x - terrain_center_world_x as f32).abs() + 
-                            //                             (player_world_z - terrain_center_world_y as f32).abs();
-                            let square_distance_to_terrain_center = (terrain_center_world_x - player_world_x as f64).powi(2) + (terrain_center_world_y - player_world_z as f64).powi(2);
-                            let distance_to_terrain_center = square_distance_to_terrain_center.sqrt() as f64;
-                            //let distance_in_tiles = (manhattan_distance_world / mean_tile_size.max(0.001)) as usize;
-                            let distance_in_tiles = (distance_to_terrain_center / planisphere.mean_tile_size.max(0.001) as f64) as usize;
-                            // Check if player raycast hit is further than max_subpixel_distance
-                            eprintln!("RAYCAST: Player hit tile at distance {} tiles from terrain center ({}, {}, {})", 
-                                     distance_in_tiles, i, j, k);
-                            if distance_in_tiles > terrain_center.max_subpixel_distance {
-                                eprintln!("RAYCAST: Player hit tile at distance {} > threshold {}, updating beacon to ({}, {}, {})", 
-                                         distance_in_tiles, terrain_center.max_subpixel_distance, i, j, k);
-                                
-                                // Update beacon position to the hit tile
-                                if let Ok(mut beacon_transform) = beacon_query.single_mut() {
-                                    // Get the exact subpixel tile center coordinates
-                                    let corners = planisphere.get_subpixel_corners(i, j, k);
-                                    let subpixel_center_lon = (corners[0].0 + corners[2].0) / 2.0;
-                                    let subpixel_center_lat = (corners[0].1 + corners[2].1) / 2.0;
-                                    
-                                    // Convert to world coordinates
-                                    let (beacon_world_x, beacon_world_y) = crate::planisphere::geo_to_gnomonic_helper(
-                                        subpixel_center_lon,
-                                        subpixel_center_lat,
-                                        terrain_center.longitude,
-                                        terrain_center.latitude,
-                                        &planisphere,
-                                    );
-                                    
-                                    // Update beacon position
-                                    beacon_transform.translation = Vec3::new(beacon_world_x as f32, 0.0, beacon_world_y as f32);
-                                    // debug_beacon.subpixel_info = Some((i, j, k)); // Field removed in refactoring
-                                    
-                                    println!("Beacon updated to tile ({}, {}, {}) at world position ({:.2}, 0.0, {:.2})", 
-                                             i, j, k, beacon_world_x, beacon_world_y);
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                // Successfully processed terrain, break out of attempt loop
-                break;
-            } else {
-                // eprintln!("RAYCASTING PLAYER Hit non-terrain entity {:?}, continuing through it", entity);
-                // Move ray origin just past this entity and continue
-                let advance_distance = ray_intersection.time_of_impact + 0.1;
-                
-                // Safety checks to prevent infinite loops
-                if advance_distance <= 0.001 {
-                    // eprintln!("RAYCASTING PLAYER Advance distance too small, breaking");
-                    break;
-                }
-                
-                current_ray_origin = current_ray_origin + ray_direction * advance_distance;
-                remaining_distance -= advance_distance;
-                
-                if remaining_distance <= 0.1 {
-                    // eprintln!("RAYCASTING PLAYER Ran out of distance after {} attempts", attempt + 1);
-                    break;
-                }
-            }
-        } else {
-            // eprintln!("RAYCASTING PLAYER No hit found after {} attempts", attempt + 1);
-            break;
-        }
-    } // End of attempt loop
-        
-        // Update timestamp even if no hit (to throttle attempts)
-        //entity_position.last_raycast_time = current_time;
-    }
+        //despawn_unified_objects_from_name(&mut commands, "LandCubes", object_query);
+        entities_in_rendered_subpixels(&mut commands, &mut meshes, &mut materials, rendered_subpixels, planisphere, terrain_center, object_templates, object_query);
 }
-
-
-
-
-
 
 
 
@@ -979,11 +510,12 @@ pub fn terrain_recreation_system(
     mut player_query: Query<(Entity, &mut Transform, &EntitySubpixelPosition , &Player)>,
     terrain_query: Query<Entity, With<crate::terrain::Tile>>,
     landscape_query: Query<Entity, With<crate::landscape::LandscapeElement>>,
-    object_query: Query<(Entity, &ObjectDefinition)>,
+    mut object_query: Query<(Entity, &mut Transform, &ObjectDefinition),(Without<Player>, Without<MouseTrackerObject>)>,
     planisphere: Res<planisphere::Planisphere>,
     mut rendered_subpixels: ResMut<RenderedSubpixels>,
     mut triangle_mapping: ResMut<crate::terrain::TriangleSubpixelMapping>,
     mut asset_tracker: ResMut<crate::TerrainAssetTracker>,
+    object_templates: Res<ObjectTemplates>,
 ) {
     let current_time = time.elapsed_secs();
     let time_since_last_recreation = current_time - terrain_center.last_recreation_time;
@@ -1002,13 +534,31 @@ pub fn terrain_recreation_system(
 }
 
 
-    despawn_unified_object_from_name(&mut commands, "TerrainCenter", object_query);
-    spawn_terraincenter_at_world_position(&mut commands, &mut meshes, &mut materials, Some(&planisphere), &terrain_center, Vec3::new(0.0, 0.0, 0.0));
+    //despawn_unified_object_from_name(&mut commands, "TerrainCenter", object_query);
+    //spawn_terraincenter_at_world_position(&mut commands, &mut meshes, &mut materials, Some(&planisphere), &terrain_center, Vec3::new(0.0, 0.0, 0.0));
 
 
     if needs_recreation {
+
         println!("Player distance from terrain center exceeds threshold. Recreating terrain... (last recreation: {:.1}s ago)", time_since_last_recreation);
         
+
+        // Store player positions and calculate the offset needed to move them to origin
+        let player_offset = if let Some((_, player_transform, _, _)) = player_query.iter().next() {
+            // The offset needed to move the player to origin
+            Vec3::new(
+                -player_transform.translation.x,
+                0.0,  // We don't change Y position (height)
+                -player_transform.translation.z
+            )
+        } else {
+            Vec3::ZERO
+        };
+
+
+
+
+
         // Use player's current geographic coordinates as new terrain center
         let (new_center_lon, new_center_lat) = planisphere.subpixel_to_geo(next_terrain_center_tile.0, next_terrain_center_tile.1, next_terrain_center_tile.2 );
         
@@ -1045,135 +595,39 @@ pub fn terrain_recreation_system(
             Some(&mut triangle_mapping),
             Some(&mut asset_tracker)
         );
-        if let Ok(mut player_transform) = player_query.single_mut() {
-            // Reposition player to new terrain center
-            player_transform.1.translation = Vec3::new(0.0, player_transform.1.translation.y, 0.0);
-            println!("Repositioned player to new terrain center at (0, {:.2}, 0)", player_transform.1.translation.y);
+
+        // Move player to origin (0, 0, 0) while keeping their Y position
+        for (_, mut player_transform, _, _) in player_query.iter_mut() {
+            player_transform.translation.x += player_offset.x;
+            player_transform.translation.z += player_offset.z;
+            // Y position remains unchanged
+        }
+
+        // Move all other objects by the same offset to maintain relative positions to player
+        for (_, mut transform, _) in object_query.iter_mut() {
+            transform.translation.x += player_offset.x;
+            transform.translation.z += player_offset.z;
+            // Y position remains unchanged
         }
         println!("Terrain recreation completed successfully");
-    }
-}
-
-/// Coordinate synchronization system - handles positioning after terrain recreation
-pub fn coordinate_sync_system(
-    terrain_center: Res<TerrainCenter>,
-    mut player_subpixel: ResMut<PlayerSubpixelPosition>,
-    mut player_query: Query<&mut Transform, (With<Player>, Without<crate::beacons::PlayerTileBeacon>, Without<crate::beacons::TerrainCenterBeacon>, Without<crate::agent::Agent>)>,
-    mut agent_query: Query<(&mut Transform, &mut EntitySubpixelPosition), (With<crate::agent::Agent>, Without<Player>, Without<crate::beacons::PlayerTileBeacon>, Without<crate::beacons::TerrainCenterBeacon>)>,
-    planisphere: Res<planisphere::Planisphere>,
-) {
-    // Only run coordinate sync when terrain center has changed
-    if !terrain_center.is_changed() {
-        return;
-    }
-    
-    let new_center_lon = terrain_center.longitude;
-    let new_center_lat = terrain_center.latitude;
-
-    // Reposition player to (0,0,0) world coordinates relative to new terrain center
-    if let Ok(mut player_transform) = player_query.single_mut() {
-        player_transform.translation = Vec3::new(0.0, player_transform.translation.y, 0.0);
-        println!("Repositioned player to (0, {:.2}, 0) relative to new terrain center", player_transform.translation.y);
-    }
-    
-    // Update player's subpixel coordinate tracking
-    let (player_new_i, player_new_j, player_new_k) = planisphere.geo_to_subpixel(new_center_lon, new_center_lat);
-    //spawn_mousetracker_at_tile(commands, meshes, materials, planisphere, terrain_center, player_new_i, player_new_j, player_new_k);
-
-    player_subpixel.subpixel = (player_new_i, player_new_j, player_new_k);
-    player_subpixel.geo_coords = (new_center_lon, new_center_lat);
-    player_subpixel.world_pos = Vec3::ZERO;
-    player_subpixel.previous_subpixel = (player_new_i, player_new_j, player_new_k);
-    
-    
-    // Reposition agents based on their subpixel coordinates relative to new terrain center
-    let mut repositioned_agents = 0;
-    for (mut agent_transform, mut agent_position) in agent_query.iter_mut() {
-        // Convert agent's subpixel coordinates to world coordinates relative to new terrain center
-        let (agent_lon, agent_lat) = planisphere.subpixel_to_geo(
-            agent_position.subpixel.0, agent_position.subpixel.1, agent_position.subpixel.2
-        );
-        
-        // Use the geo_to_gnomonic_helper function from the planisphere
-        let (agent_world_x, agent_world_z) = crate::planisphere::geo_to_gnomonic_helper(
-            agent_lon, agent_lat, new_center_lon, new_center_lat, &planisphere
-        );
-        
-        // Update agent world position (keep Y coordinate for physics)
-        agent_transform.translation.x = agent_world_x as f32;
-        agent_transform.translation.z = agent_world_z as f32;
-        
-        // Update agent's coordinate tracking
-        agent_position.world_pos = agent_transform.translation;
-        agent_position.geo_coords = (agent_lon, agent_lat);
-        
-        repositioned_agents += 1;
-    }
-    
-    println!("Repositioned {} agents relative to new terrain center", repositioned_agents);
-    println!("Coordinate synchronization completed successfully");
-}
-
-
-
-
-
-
-pub fn player_raycast_system(
-    time: Res<Time>,
-    mut raycast_query: Query<(&Transform, &mut PlayerRaycast), With<Player>>,
-) {
-    let current_time = time.elapsed_secs();
-    
-    for (transform, mut raycast) in raycast_query.iter_mut() {
-        if current_time - raycast.last_check_time >= raycast.check_interval {
-            let ray_start = transform.translation + Vec3::Y * 0.5;
-            let ray_direction = transform.forward().normalize();
-            
-            // Simplified raycast simulation for now
-            // TODO: Use proper RapierContext when Bevy-Rapier API is updated
-            // For now, we'll simulate obstacle detection based on player position and direction
-            
-            // Simulate hitting terrain at low Y positions (ground level detection)
-            let _ground_height = 0.0;
-            let obstacle_ahead = transform.translation.y < 3.0 && ray_direction.y < 0.0;
-            
-            // Simulate hitting objects based on position (simple heuristic)
-            let forward_point = transform.translation + ray_direction * raycast.range;
-            let estimated_terrain_height = 0.0; // In real implementation, sample terrain height
-            
-            if obstacle_ahead || forward_point.y <= estimated_terrain_height {
-                // Simulate hitting something
-                let estimated_distance = if obstacle_ahead {
-                    2.0 // Close obstacle
-                } else {
-                    // Calculate distance to ground intersection
-                    let height_diff = transform.translation.y - estimated_terrain_height;
-                    if ray_direction.y < -0.1 {
-                        height_diff / -ray_direction.y
-                    } else {
-                        raycast.range * 0.8 // Far obstacle
-                    }
-                };
-                
-                raycast.hit_something = true;
-                raycast.hit_distance = estimated_distance.min(raycast.range);
-                raycast.hit_point = ray_start + ray_direction * raycast.hit_distance;
-                raycast.hit_normal = Vec3::Y; // Assume ground normal
-                
-                // Debug output when close to obstacles
-                if raycast.hit_distance < 5.0 {
-                    println!("Player raycast simulated hit at distance: {:.2}", raycast.hit_distance);
-                }
-            } else {
-                // No obstacle detected
-                raycast.hit_something = false;
-                raycast.hit_distance = raycast.range;
-                raycast.hit_point = Vec3::ZERO;
-                raycast.hit_normal = Vec3::ZERO;
-            }
-            
-            raycast.last_check_time = current_time;
+        // we need to print the 5 first elements of the triangle mapping and the first elements of the rendered subpixels
+        println!("Triangle mapping size: {}, first 5 entries: {:?}", 
+            triangle_mapping.triangle_to_subpixel.len(), 
+            &triangle_mapping.triangle_to_subpixel[..5]);
+        println!("Rendered subpixels size: {}", //
+            rendered_subpixels.subpixels.len());
+        println!("First 5 rendered subpixels:");
+        for tuple in rendered_subpixels.subpixels.iter().take(5) {
+            println!("Subpixel: ({}, {}, {})",
+                tuple.0, tuple.1, tuple.2
+            );
         }
+        entity_replacement_system(commands, meshes, materials, rendered_subpixels, object_query, terrain_center, planisphere, object_templates);
     }
 }
+
+
+
+
+
+

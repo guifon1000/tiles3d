@@ -1,7 +1,6 @@
 // Import statements - bring in code from external crates and our own modules
 use bevy::prelude::*;           // Bevy game engine - the * imports everything commonly used
 use bevy_rapier3d::prelude::*;  // Rapier physics engine - handles collision detection and physics
-use bevy_rich_text3d::{Text3d, Text3dPlugin, Text3dStyling, TextAtlas};
 
 // Module declarations - tell Rust about our other source files
 mod terrain;     // terrain.rs - handles pure terrain mesh generation
@@ -18,14 +17,14 @@ mod game_object; // game_object.rs - handles object definitions and spawning log
 
 // Import the specific functions we need from our modules
 // 'use' statements make functions available in this file without the module prefix
-use terrain::{create_terrain_gnomonic_rectangular, RenderedSubpixels, manage_object_visibility, PerformanceStats, TriangleSubpixelMapping, TerrainCenter}; // Pure terrain mesh generation
-use landscape::{create_items, create_landscape_elements, update_landscape_lod, cull_landscape_by_terrain}; // Landscape elements and items
-use beacons::{create_debug_beacons, create_player_tile_beacon, create_terrain_center_beacon}; // Debug beacons
-use agent::{create_agents, move_agents, check_sensors, check_ground_sensors, agent_raycast_system, debug_agent_raycast_system}; // Agent-related functions
+use terrain::{create_terrain_gnomonic_rectangular, RenderedSubpixels, PerformanceStats, TriangleSubpixelMapping, TerrainCenter}; // Pure terrain mesh generation
 use camera::{setup_third_person_camera, update_third_person_camera, third_person_camera_rotation, update_camera_light, handle_camera_zoom, handle_camera_height}; // Camera-related functions
-use player::{check_update_terrain_center, move_player, check_player_sensors, check_player_ground_sensors, track_entities_subpixel_position_raycast, player_raycast_system, cast_ray_from_camera, terrain_recreation_system, coordinate_sync_system}; // Player-related functions
+use player::{entity_replacement_system, move_player, check_player_sensors, check_player_ground_sensors, cast_ray_from_camera, terrain_recreation_system}; // Player-related functions
 use ui::{setup_ui, update_coordinate_display}; // UI setup function and coordinate display update system
-use game_object::{spawn_player, spawn_dynamic_object_with_raycast_with_ui, RaycastTileLocator, ObjectDefinition, ObjectPosition, ObjectShape, CollisionBehavior, ExistenceConditions, update_subpixel_text_system, setup_entity_overlays, update_entity_ui_overlays}; // Game object spawning and management
+use game_object::{setup_object_templates, cleanup_orphaned_overlays, spawn_player, 
+     ObjectDefinition, ObjectPosition, 
+    ObjectShape, CollisionBehavior, ExistenceConditions, setup_entity_overlays, 
+    update_entity_ui_overlays, spawn_mouse_tracker, setup_player}; // Game object spawning and management
 use crate::planisphere::Planisphere;
 
 /// Configuration for terrain generation and management
@@ -64,6 +63,9 @@ impl Default for TerrainConfig {
         }
     }
 }
+
+
+
 
 impl Resource for Planisphere {
     // This allows Planisphere to be used as a Bevy resource
@@ -116,6 +118,7 @@ fn main() {
     let radius = 1000.0; // Radius of the terrain in meters
     let image_path = "assets/maps/sphere_texture.png";
 
+
     // Initialize the Planisphere with the specified size and detail level
     let planisphere = Planisphere::from_elevation_map(image_path, sub_k, radius)
         .expect("Failed to load elevation map");
@@ -133,10 +136,7 @@ fn main() {
         // Add physics simulation
         .add_plugins(RapierPhysicsPlugin::<NoUserData>::default()) // 3D physics with no custom user data
         
-        .add_plugins(Text3dPlugin {
-            load_system_fonts: true,
-            ..Default::default()
-        })
+
         // Uncomment the next line to see physics debug visualization (collision shapes, etc.)
         // .add_plugins(RapierDebugRenderPlugin::default()) // Debug disabled for cleaner visuals
         .insert_resource(planisphere)
@@ -144,12 +144,7 @@ fn main() {
         .insert_resource(TerrainAssetTracker::default()) // Asset tracking for cleanup
         // Add shared resources for player tracking and terrain management
          // Initialize Planisphere with size and detail
-        .insert_resource(player::PlayerSubpixelPosition {
-            subpixel: (iplayer, jplayer, kplayer),
-            geo_coords: (initial_lon, initial_lat),
-            world_pos: Vec3::ZERO,
-            previous_subpixel: (iplayer, jplayer, kplayer),
-        })
+
         //.init_resource::<PlayerSubpixelPosition>()
         .insert_resource(terrain::TerrainCenter {
             longitude: initial_lon,
@@ -165,8 +160,9 @@ fn main() {
         .insert_resource(TriangleSubpixelMapping::default())
         
         // Systems that run once at startup (world setup)
-        .add_systems(Startup, (setup_third_person_camera, setup_physics, setup_ui, setup_entity_overlays)) // Setup camera, physics world, and UI
-        
+        .add_systems(Startup, (setup_third_person_camera)) // Setup camera, physics world, and UI
+        .add_systems(Startup, (setup_physics, setup_ui))
+        .add_systems(Startup, setup_player)
         // Systems that run every frame (game loop) - split into groups to avoid tuple size limit
         .add_systems(Update, (
             //move_agents,                    // Update agent movement and behavior
@@ -177,21 +173,17 @@ fn main() {
             check_player_sensors,           // Handle player item pickup detection
             check_player_ground_sensors,    // Handle player ground collision detection
             setup_entity_overlays,          // Setup UI overlays for entities
+            cleanup_orphaned_overlays,      // Clean up old UI overlays
             update_entity_ui_overlays,
             //player_raycast_system,          // Handle player raycasting for obstacle detection
         ))
         .add_systems(Update, (
-            //track_player_subpixel_position, // DEPRECATED: Keep for compatibility (will be removed)
-            //track_entities_subpixel_position_raycast, // NEW: Unified raycast positioning for players and agents
-            //manage_object_visibility,       // Show/hide objects based on rendered terrain
-            //reposition_objects_on_terrain_recreation, // Reposition objects when terrain is recreated
-            cast_ray_from_camera,
+            player::cast_ray_from_camera,
+            player::detect_mouse_clicks,
             //track_entities_subpixel_position_raycast,
             game_object::raycast_tile_locator_system,
-            update_subpixel_text_system,    // Update subpixel text display
-            check_update_terrain_center, // Check if terrain center needs updating
         ))
-        .add_systems(Update, (terrain_recreation_system))     // Handle terrain recreation with asset cleanup and coordinate sync
+        .add_systems(Update, terrain_recreation_system)     // Handle terrain recreation with asset cleanup and coordinate sync
         .add_systems(Update, update_coordinate_display)      // Update the UI coordinate display with current player position
         .add_systems(Update, (
             update_third_person_camera,     // Update camera to follow player
@@ -239,8 +231,8 @@ fn setup_physics(
     terrain_center.max_subpixel_distance = terrain_config.recreation_threshold; // Sync with TerrainConfig
     terrain_center.last_recreation_time = -10.0; // Allow immediate recreation if needed
     
-    
-    // Create the terrain using gnomonic projection with subpixel system - RECTANGULAR pattern
+    setup_object_templates(&mut commands, &asset_server)  ;  // Create the terrain using gnomonic projection with subpixel system - RECTANGULAR pattern
+
     create_terrain_gnomonic_rectangular(
         &mut commands, 
         &mut meshes, 
@@ -267,22 +259,9 @@ fn setup_physics(
     //create_agents(&mut commands, &mut meshes, &mut materials, 1, &planisphere, terrain_center.center_lon, terrain_center.center_lat);
     
     // Create the player (red capsule controlled by keyboard)
-    spawn_player(&mut commands, &mut meshes, &mut materials, Some(&planisphere), &terrain_center);
 
-    let object_definition = ObjectDefinition {
-        position: ObjectPosition::WorldCoordinates(Vec3::new(3.0, 5.0, 3.0)), // Start at (0, 5, 0) in world coordinates
-        shape: ObjectShape::Cylinder { radius: 0.3, height: 0.8 },
-        color: Color::srgb(0.6, 0.3, 0.1), // Red color for player
-        collision: CollisionBehavior::Dynamic,
-        existence_conditions: Some(ExistenceConditions::Always),
-        object_type: "Truc".to_string(),
-        scale: Vec3::ONE,
-        y_offset: 5.0, // Start above ground
-        mesh: None,
-        material: None,
-    };
 
-    spawn_dynamic_object_with_raycast_with_ui(&mut commands, &mut meshes, &mut materials, Some(&planisphere), &terrain_center, object_definition);
+    //spawn_dynamic_object_with_raycast_with_ui(&mut commands, &mut meshes, &mut materials, Some(&planisphere), &terrain_center, object_definition);
 
     // Create collectible items in the world
     // Currently creates a single "Magic Stone" that agents can pick up

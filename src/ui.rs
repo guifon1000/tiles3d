@@ -1,7 +1,6 @@
-use bevy::ecs::entity;
-use bevy::{prelude::*, transform};
+use bevy::prelude::*;
 use crate::planisphere;
-use crate::player::{PlayerSubpixelPosition, EntitySubpixelPosition, Player};
+use crate::player::{EntitySubpixelPosition, Player};
 use crate::terrain::TerrainCenter;
 
 /// Component to mark the coordinate display text entity
@@ -73,10 +72,10 @@ pub fn update_coordinate_display(
     mut text_query: Query<&mut Text, With<CoordinateDisplay>>,
     planisphere : Res<planisphere::Planisphere>,
 ) {
-    let  mut world_pos  = Vec3::ZERO;
+    let  mut _world_pos  = Vec3::ZERO;
     for mut text in text_query.iter_mut() {
         // Get coordinates from new shared component if available, otherwise use old resource
-        for (entity, transform, ijkpos, player   ) in player_query.iter() {
+        for (_entity, transform, ijkpos, _player   ) in player_query.iter() {
             // Use the transform to get world position
             let world_pos = transform.translation;
             

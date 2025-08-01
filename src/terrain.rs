@@ -1,3 +1,4 @@
+use bevy::ecs::{spawn, world};
 // Import statements - bring in code from other modules and crates
 use bevy::prelude::*;           // Bevy game engine core functionality
 use bevy_rapier3d::prelude::*;  // Physics engine for 3D collision detection
@@ -6,8 +7,10 @@ use bevy::pbr::wireframe::Wireframe; // Wireframe rendering for debugging/visual
 // Import the planisphere module for gnomonic projection
 use crate::planisphere;
 use crate::beacons::PlayerTileBeacon;
+use crate::game_object::{MouseTrackerObject, ObjectPosition, ObjectShape, ObjectDefinition, CollisionBehavior, ExistenceConditions,
+                            spawn_template_scene, spawn_unified_object, ObjectTemplates, despawn_unified_objects_from_name};
 // use crate::TerrainAssets;
-
+use crate::player::{EntitySubpixelPosition, Player}; // Import player-related components
 /// Tile Component - Marks entities as part of the terrain
 /// This is attached to terrain entities so agents can detect when they touch the ground
 #[derive(Component)]
@@ -15,21 +18,6 @@ pub struct Tile;
 
 // Components for landscape/beacons have been moved to their respective modules
 
-/// SubpixelPosition Component - Tracks an object's "home" position in the (i,j,k) subpixel coordinate system
-/// For agents, this represents their respawn location when terrain is recreated
-/// For static objects, this is their fixed position for visibility calculations
-#[derive(Component, Clone, Debug)]
-pub struct SubpixelPosition {
-    pub i: usize,  // Horizontal pixel index
-    pub j: usize,  // Vertical pixel index 
-    pub k: usize,  // Subpixel index within the pixel
-}
-
-impl SubpixelPosition {
-    pub fn new(i: usize, j: usize, k: usize) -> Self {
-        Self { i, j, k }
-    }
-}
 
 // Object system components have been moved to objects.rs module
 
@@ -107,6 +95,51 @@ fn deterministic_random(i: usize, j: usize, k: usize) -> f64 {
     // Convert to 0.0-1.0 range
     (hash as f64) / (u64::MAX as f64)
 }
+
+
+
+
+
+
+// Usage in your terrain spawning
+pub fn entities_in_rendered_subpixels(
+    commands: &mut Commands,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<StandardMaterial>>,
+    rendered_subpixels: ResMut<RenderedSubpixels>,
+    planisphere: Res<planisphere::Planisphere>,
+    terrain_center: ResMut<TerrainCenter>,
+    object_templates: Res<ObjectTemplates>,
+    query : Query<(Entity, &mut Transform,  &ObjectDefinition), (Without<Player>, Without<MouseTrackerObject>)>,
+) -> Vec<Entity> {
+    const SPAWN_THRESHOLD: f64 = 0.999;
+    let mut entities = Vec::new();
+    despawn_unified_objects_from_name(commands, "Tree", query);
+    for subpixel_pos in rendered_subpixels.subpixels.iter() {
+        let rdm0 = deterministic_random(subpixel_pos.0, subpixel_pos.1, subpixel_pos.2);
+        
+        if rdm0 > SPAWN_THRESHOLD {
+            let entity = spawn_template_scene(
+                commands, 
+                materials, 
+                &planisphere, 
+                &terrain_center,
+                &object_templates.tree, 
+                (subpixel_pos.0 as usize, subpixel_pos.1 as usize, subpixel_pos.2 as usize), // Use subpixel coordinates 
+                0.0, // y_offset
+                CollisionBehavior::Static, // Static collision for trees
+                ()
+            );
+            entities.push(entity);
+        }
+    }
+    entities
+}
+
+
+
+
+
 
 /// Determine landscape element type based on RGBA channel values and random probability
 ///
@@ -575,13 +608,13 @@ pub fn create_terrain_gnomonic_with_distance_method(
 /// Regular objects use full terrain visibility, agents use 2/3 radius visibility
 pub fn manage_object_visibility(
     rendered_subpixels: Res<RenderedSubpixels>,
-    mut regular_objects: Query<(&mut Visibility, &SubpixelPosition), (Without<Tile>, Without<PlayerTileBeacon>, Without<crate::agent::Agent>)>,
-    mut agents: Query<(&mut Visibility, &SubpixelPosition), With<crate::agent::Agent>>,
+    mut regular_objects: Query<(&mut Visibility), (Without<Tile>, Without<PlayerTileBeacon>, Without<crate::agent::Agent>)>,
+    mut agents: Query<(&mut Visibility), With<crate::agent::Agent>>,
 ) {
     if rendered_subpixels.is_changed() {
         // Handle regular objects (full terrain visibility)
-        for (mut visibility, subpixel_pos) in regular_objects.iter_mut() {
-            let is_visible = rendered_subpixels.is_visible(subpixel_pos.i, subpixel_pos.j, subpixel_pos.k);
+        for (mut visibility) in regular_objects.iter_mut() {
+            let is_visible = true; //rendered_subpixels.is_visible(subpixel_pos.i, subpixel_pos.j, subpixel_pos.k);
             *visibility = if is_visible { Visibility::Visible } else { Visibility::Hidden };
         }
         
@@ -590,16 +623,16 @@ pub fn manage_object_visibility(
         let mut visible_agents = 0;
         let mut total_agents = 0;
         
-        for (mut visibility, subpixel_pos) in agents.iter_mut() {
+        for (mut visibility) in agents.iter_mut() {
             total_agents += 1;
-            
+            let subpixel_pos = (0,0,0); // Placeholder for agent subpixel position
             // Calculate distance from terrain center to agent position using the same method as terrain generation
             let center_i = rendered_subpixels.center_i;
             let center_j = rendered_subpixels.center_j;
             let center_k = rendered_subpixels.center_k;
             
-            let dist_i = if subpixel_pos.i > center_i { subpixel_pos.i - center_i } else { center_i - subpixel_pos.i };
-            let dist_j = if subpixel_pos.j > center_j { subpixel_pos.j - center_j } else { center_j - subpixel_pos.j };
+            let dist_i = if subpixel_pos.0 > center_i { subpixel_pos.0 - center_i } else { center_i - subpixel_pos.0 };
+            let dist_j = if subpixel_pos.1 > center_j { subpixel_pos.1 - center_j } else { center_j - subpixel_pos.1 };
             
             // Calculate base distance in terms of full pixels
             let pixel_distance = dist_i + dist_j;
@@ -608,12 +641,12 @@ pub fn manage_object_visibility(
             let mut subpixel_distance = pixel_distance * 8; // subpixel_divisions from main.rs
             
             // If in the same pixel, calculate subpixel-level distance
-            if subpixel_pos.i == center_i && subpixel_pos.j == center_j {
+            if subpixel_pos.0 == center_i && subpixel_pos.1 == center_j {
                 // Direct subpixel distance calculation
-                let sub_distance = if subpixel_pos.k > center_k { 
-                    subpixel_pos.k - center_k 
+                let sub_distance = if subpixel_pos.2 > center_k { 
+                    subpixel_pos.2 - center_k 
                 } else { 
-                    center_k - subpixel_pos.k 
+                    center_k - subpixel_pos.2 
                 };
                 subpixel_distance = sub_distance;
             }
