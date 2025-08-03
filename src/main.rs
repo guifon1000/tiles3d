@@ -19,12 +19,10 @@ mod game_object; // game_object.rs - handles object definitions and spawning log
 // 'use' statements make functions available in this file without the module prefix
 use terrain::{create_terrain_gnomonic_rectangular, RenderedSubpixels, PerformanceStats, TriangleSubpixelMapping, TerrainCenter}; // Pure terrain mesh generation
 use camera::{setup_third_person_camera, update_third_person_camera, third_person_camera_rotation, update_camera_light, handle_camera_zoom, handle_camera_height}; // Camera-related functions
-use player::{entity_replacement_system, move_player, check_player_sensors, check_player_ground_sensors, cast_ray_from_camera, terrain_recreation_system}; // Player-related functions
+use player::{move_player, check_player_sensors, check_player_ground_sensors, terrain_recreation_system}; // Player-related functions
 use ui::{setup_ui, update_coordinate_display}; // UI setup function and coordinate display update system
-use game_object::{setup_object_templates, cleanup_orphaned_overlays, spawn_player, 
-     ObjectDefinition, ObjectPosition, 
-    ObjectShape, CollisionBehavior, ExistenceConditions, setup_entity_overlays, 
-    update_entity_ui_overlays, spawn_mouse_tracker, setup_player}; // Game object spawning and management
+use game_object::{setup_object_templates, cleanup_orphaned_overlays, setup_entity_overlays, 
+    update_entity_ui_overlays, setup_player}; // Game object spawning and management
 use crate::planisphere::Planisphere;
 
 /// Configuration for terrain generation and management
@@ -114,7 +112,7 @@ impl TerrainAssetTracker {
 /// Main function - the entry point of our Rust program
 /// This is where the program starts running when you execute it
 fn main() {
-    let sub_k = 14; // Number of subpixels in the vertical direction
+    let sub_k = 15; // Number of subpixels in the vertical direction
     let radius = 1000.0; // Radius of the terrain in meters
     let image_path = "assets/maps/sphere_texture.png";
 
@@ -160,7 +158,7 @@ fn main() {
         .insert_resource(TriangleSubpixelMapping::default())
         
         // Systems that run once at startup (world setup)
-        .add_systems(Startup, (setup_third_person_camera)) // Setup camera, physics world, and UI
+        .add_systems(Startup, setup_third_person_camera) // Setup camera, physics world, and UI
         .add_systems(Startup, (setup_physics, setup_ui))
         .add_systems(Startup, (setup_object_templates, setup_player).chain())
         // Systems that run every frame (game loop) - split into groups to avoid tuple size limit
@@ -237,11 +235,10 @@ fn setup_physics(
         &mut commands, 
         &mut meshes, 
         &mut materials,
-        &asset_server,
-        terrain_center.longitude,              // Center longitude
-        terrain_center.latitude,              // Center latitude
+        &asset_server,            // Center latitude
         terrain_config.terrain_radius,          // Use config terrain radius
-        &planisphere,                           // Planisphere reference
+        &planisphere,    
+        &terrain_center,                       // Planisphere reference
         Some(&mut rendered_subpixels),          // Pass rendered subpixels resource
         Some(&mut triangle_mapping),            // Pass triangle mapping resource
         Some(&mut asset_tracker)                // Pass asset tracker for cleanup

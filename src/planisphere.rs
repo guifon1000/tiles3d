@@ -307,17 +307,6 @@ impl Planisphere {
         self.get_rgba_at_pixel(i, j)
     }
 
-    /// Loads elevation data from an image file
-    ///
-    /// # Parameters
-    /// * `filename` - Path to the elevation map image
-    pub fn load_elevation_map00(&mut self, filename: &str) {
-        match image::open(filename) {
-            Ok(img) => self.elevation_map = Some(img),
-            Err(err) => eprintln!("Error loading elevation map: {}", err),
-        }
-    }
-
     /// Converts a grid position (including subpixel) to geographic coordinates
     ///
     /// # Parameters

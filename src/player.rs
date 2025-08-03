@@ -11,7 +11,6 @@ use bevy::input::mouse::{MouseMotion, MouseButton};
 // Mouse movement events
 use crate::terrain::{RenderedSubpixels, Tile, TerrainCenter, entities_in_rendered_subpixels}; // Import Tile component and resources from terrain module
 use crate::landscape::Item; // Import Item from landscape module
-use crate::game_object::{RaycastTileLocator};
 // use crate::TerrainConfig;
 use crate::planisphere::{self}; // Import planisphere for coordinate conversion
 use crate::game_object::{ObjectTemplate, CollisionBehavior, 
@@ -180,8 +179,6 @@ pub fn cast_ray_from_camera(
     for (marker_entity, mut transform) in mouse_tracker_query.iter_mut() {
         // Reset the mouse tracker position to the raycast hit point
         transform.translation = hit_point;
-        eprint!("Mouse tracker position updated to: ({:.2}, {:.2}, {:.2})\n", 
-            transform.translation.x, transform.translation.y, transform.translation.z);
     }
 }
 
@@ -249,9 +246,9 @@ pub fn drop_stone(
                     player_transform.translation.y + template.y_offset, // Use player's Y position + offset
                     CollisionBehavior::Dynamic, // Set collision behavior to dynamic for dropped items
                     (physics_bundle, 
-                        crate::game_object::RaycastTileLocator{last_tile: None}, 
-                        crate::game_object::EntityInfoOverlay::default(),
-                        EntitySubpixelPosition::default(),
+                        //crate::game_object::RaycastTileLocator{last_tile: None}, 
+                        //crate::game_object::EntityInfoOverlay::default(),
+                        //EntitySubpixelPosition::default(),
                     )
                 );
             }
@@ -587,10 +584,9 @@ pub fn terrain_recreation_system(
             &mut meshes,
             &mut materials,
             &asset_server,
-            new_center_lon,
-            new_center_lat,
             40, // Use terrain radius
             &planisphere,
+            &terrain_center,
             Some(&mut rendered_subpixels),
             Some(&mut triangle_mapping),
             Some(&mut asset_tracker)

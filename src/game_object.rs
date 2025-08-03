@@ -1,7 +1,5 @@
-use std::num::NonZero;
 
-use bevy::ecs::{spawn, world};
-use bevy::{prelude::*, scene};
+use bevy::prelude::*;
 use bevy_rapier3d::prelude::*;
 use crate::player::{calculate_subpixel_center_world_position, Player, EntitySubpixelPosition};
 use crate::planisphere::{self, Planisphere};
@@ -124,7 +122,6 @@ pub struct EntityUIText {
 /// Unified object definition for spawning various game objects
 #[derive(Component, Debug, Clone)]
 pub struct ObjectDefinition {
-    pub position: ObjectPosition,
     pub shape: ObjectShape,
     pub color: Color,
     pub collision: CollisionBehavior,
@@ -399,7 +396,6 @@ pub fn spawn_mouse_tracker(
 ) -> Entity {
     let world_pos = Vec3::new(0.0, 10.0, 0.0); // Start above ground
         let object_definition = ObjectDefinition {
-        position: ObjectPosition::WorldCoordinates(world_pos), // Start above ground
         shape: ObjectShape::Sphere { radius: 0.3},
         color: Color::srgb(0.0, 0.3, 0.7), // Red color for player
         collision: CollisionBehavior::None,
@@ -558,7 +554,6 @@ pub fn setup_object_templates(mut commands: Commands, asset_server: Res<AssetSer
             scale: Vec3::ONE,
             rotation_y: 0.0,  // No rotation by default
             object_definition: ObjectDefinition {
-                position: ObjectPosition::WorldCoordinates(Vec3::ZERO), // Default position
                 shape: ObjectShape::Cube { size: Vec3::ONE }, // Default shape
                 color: Color::srgb(0.0, 1.0, 0.0), // Green color for trees
                 collision: CollisionBehavior::Static,
@@ -577,7 +572,6 @@ pub fn setup_object_templates(mut commands: Commands, asset_server: Res<AssetSer
             scale: Vec3::ONE,
             rotation_y: 0.0,  // No rotation by default
             object_definition: ObjectDefinition {
-                position: ObjectPosition::WorldCoordinates(Vec3::ZERO), // Default position
                 shape: ObjectShape::Cube { size: Vec3::ONE }, // Default shape
                 color: Color::srgb(0.0, 1.0, 0.0), // Green color for trees
                 collision: CollisionBehavior::Static,
@@ -596,7 +590,6 @@ pub fn setup_object_templates(mut commands: Commands, asset_server: Res<AssetSer
             scale: 0.04 * Vec3::ONE,
             rotation_y: std::f32::consts::PI,  // 180 degrees in radians
             object_definition: ObjectDefinition {
-                position: ObjectPosition::WorldCoordinates(Vec3::ZERO), // Default position
                 shape: ObjectShape::Cube { size: Vec3::ONE }, // Default shape
                 color: Color::srgb(0.0, 1.0, 0.0), // Green color for trees
                 collision: CollisionBehavior::Dynamic,
@@ -662,7 +655,6 @@ pub fn spawn_template_scene<Extra: Bundle, T: IntoWorldPosition>(
         Transform::from_translation(world_pos+Vec3::new(0.0, y_offset, 0.0)),
         Visibility::default(),
         ObjectDefinition {
-            position: ObjectPosition::WorldCoordinates(world_pos),
             shape: ObjectShape::Cube { size: Vec3::ONE },
             color: Color::WHITE,
             collision,

@@ -5,7 +5,7 @@ use bevy_rapier3d::prelude::*;  // Physics engine for 3D collision detection
 use bevy::pbr::wireframe::Wireframe; // Wireframe rendering for debugging/visualization
 
 // Import the planisphere module for gnomonic projection
-use crate::planisphere;
+use crate::{planisphere, terrain};
 use crate::beacons::PlayerTileBeacon;
 use crate::game_object::{MouseTrackerObject, ObjectPosition, ObjectShape, ObjectDefinition, CollisionBehavior, ExistenceConditions,
                             spawn_template_scene, spawn_unified_object, ObjectTemplates, despawn_unified_objects_from_name};
@@ -117,8 +117,8 @@ pub fn entities_in_rendered_subpixels(
     despawn_unified_objects_from_name(commands, "Tree", query);
     for subpixel_pos in rendered_subpixels.subpixels.iter() {
         let rdm0 = deterministic_random(subpixel_pos.0, subpixel_pos.1, subpixel_pos.2);
-        
-        if rdm0 > SPAWN_THRESHOLD {
+        let (red, green, blue, alpha) = planisphere.get_rgba_at_subpixel(subpixel_pos.0, subpixel_pos.1, subpixel_pos.2);
+        if rdm0 > SPAWN_THRESHOLD && 1.-alpha > 0.5 {
             let entity = spawn_template_scene(
                 commands, 
                 materials, 
@@ -259,27 +259,27 @@ pub fn determine_landscape_element_from_rgba(_red: f64, _green: f64, _blue: f64,
 pub fn select_texture_from_rgba(red: f64, _green: f64, _blue: f64, _alpha: f64) -> usize {
     // Current implementation: Simple red-channel-based texture selection
     // Maps red values to texture indices using threshold ranges
-    
-    let texture_index = if red < 0.1 {
-        0  // Very dark red -> texture 0 (e.g., deep water)
-    } else if red < 0.2 {
-        1  // Dark red -> texture 1 (e.g., dirt) 
-    } else if red < 0.3 {
-        2  // Low red -> texture 2 (e.g., dry grass)
-    } else if red < 0.4 {
-        3  // Medium-low red -> texture 3 (e.g., regular grass)
-    } else if red < 0.5 {
-        4  // Medium red -> texture 4 (e.g., green stone)   
-    } else if red < 0.6 {
-        5  // Medium-high red -> texture 5 (e.g., moss)
-    } else if red < 0.7 {
-        6  // High red -> texture 6 (e.g., sand)
-    } else if red < 0.8 {
-        7  // Higher red -> texture 7 (e.g., stone)
-    } else if red < 0.9 {
-        8  // Very high red -> texture 8 (e.g., snow)
+    let alpha = 1.0 - _alpha;
+    let texture_index = if alpha < 0.1 {
+        0  // Very dark alpha -> texture 0 (e.g., deep water)
+    } else if alpha < 0.2 {
+        1  // Dark alpha -> texture 1 (e.g., dirt) 
+    } else if alpha < 0.3 {
+        2  // Low alpha -> texture 2 (e.g., dry grass)
+    } else if alpha < 0.4 {
+        3  // Medium-low alpha -> texture 3 (e.g., regular grass)
+    } else if alpha < 0.5 {
+        4  // Medium alpha -> texture 4 (e.g., green stone)   
+    } else if alpha < 0.6 {
+        5  // Medium-high alpha -> texture 5 (e.g., moss)
+    } else if alpha < 0.7 {
+        6  // High alpha -> texture 6 (e.g., sand)
+    } else if alpha < 0.8 {
+        7  // Higher alpha -> texture 7 (e.g., stone)
+    } else if alpha < 0.9 {
+        8  // Very high alpha -> texture 8 (e.g., snow)
     } else {
-        9  // Maximum red -> texture 9 (e.g., lava)
+        9  // Maximum alpha -> texture 9 (e.g., lava)
     };
     
     // Debug output to track texture selection (remove in production)
@@ -330,18 +330,16 @@ pub fn create_terrain_gnomonic_rectangular(
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<StandardMaterial>>,
     asset_server: &Res<AssetServer>,
-    center_lon: f64,
-    center_lat: f64,
     max_subpixel_render_distance: usize,
     planisphere: &planisphere::Planisphere,
+    terrain_center: &TerrainCenter, // Terrain center resource
     rendered_subpixels: Option<&mut ResMut<RenderedSubpixels>>,
     triangle_mapping: Option<&mut ResMut<TriangleSubpixelMapping>>,
     asset_tracker: Option<&mut ResMut<crate::TerrainAssetTracker>>,
 ) {
     create_terrain_gnomonic_with_distance_method(
-        commands, meshes, materials, asset_server,
-        center_lon, center_lat, max_subpixel_render_distance,
-        planisphere, rendered_subpixels, triangle_mapping,
+        commands, meshes, materials, asset_server, max_subpixel_render_distance,
+        planisphere, terrain_center, rendered_subpixels, triangle_mapping,
         crate::planisphere::DistanceMethod::Chebyshev,
         asset_tracker,
     )
@@ -353,21 +351,20 @@ pub fn create_terrain_gnomonic_with_distance_method(
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<StandardMaterial>>,
     asset_server: &Res<AssetServer>,
-    center_lon: f64,                     // Center longitude for projection
-    center_lat: f64,                     // Center latitude for projection
     max_subpixel_render_distance: usize,       // Maximum subpixel distance from center
     planisphere: &planisphere::Planisphere, // Reference to planisphere
+    terrain_center: &TerrainCenter, // Terrain center resource
     rendered_subpixels: Option<&mut ResMut<RenderedSubpixels>>, // Optional resource to update
     triangle_mapping: Option<&mut ResMut<TriangleSubpixelMapping>>, // Optional triangle mapping to update
     distance_method: crate::planisphere::DistanceMethod, // Distance calculation method
     mut asset_tracker: Option<&mut ResMut<crate::TerrainAssetTracker>>, // Optional asset tracker for cleanup
 ) {
     // Use the provided center coordinates for terrain generation
-    let (actual_center_lon, actual_center_lat) = (center_lon, center_lat);
+    let (actual_center_lon, actual_center_lat) = (terrain_center.longitude, terrain_center.latitude);
     println!("Creating terrain with center: Lat: {:.6}°, Lon: {:.6}°", actual_center_lat, actual_center_lon);
     
     // Find the corresponding subpixel coordinates for the terrain center
-    let (center_i, center_j, center_k) = planisphere.geo_to_subpixel(center_lon, center_lat);
+    let (center_i, center_j, center_k) = planisphere.geo_to_subpixel(actual_center_lon, actual_center_lat);
     
     // Get subpixels using the specified distance method
     let subpixels = planisphere.get_subpixels_by_distance_method(center_i, center_j, center_k, max_subpixel_render_distance, distance_method);
@@ -590,10 +587,10 @@ pub fn create_terrain_gnomonic_with_distance_method(
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs_f64();
-        triangle_mapping.terrain_center_lon = center_lon;
-        triangle_mapping.terrain_center_lat = center_lat;
+        triangle_mapping.terrain_center_lon = actual_center_lon;
+        triangle_mapping.terrain_center_lat = actual_center_lat;
         println!("Updated triangle mapping with {} triangles for terrain center ({:.6}, {:.6})", 
-            triangle_mapping.triangle_to_subpixel.len(), center_lon, center_lat);
+            triangle_mapping.triangle_to_subpixel.len(), actual_center_lon, actual_center_lat);
     }
     
     println!("=== TERRAIN MESH DEBUG ===");
