@@ -6,11 +6,12 @@ use bevy::pbr::wireframe::Wireframe; // Wireframe rendering for debugging/visual
 
 // Import the planisphere module for gnomonic projection
 use crate::{planisphere, terrain};
+use crate::game_object::EntitySubpixelPosition;
 use crate::beacons::PlayerTileBeacon;
 use crate::game_object::{MouseTrackerObject, ObjectPosition, ObjectShape, ObjectDefinition, CollisionBehavior, ExistenceConditions,
                             spawn_template_scene, spawn_unified_object, ObjectTemplates, despawn_unified_objects_from_name};
 // use crate::TerrainAssets;
-use crate::player::{EntitySubpixelPosition, Player}; // Import player-related components
+use crate::player::Player; // Import player-related components
 /// Tile Component - Marks entities as part of the terrain
 /// This is attached to terrain entities so agents can detect when they touch the ground
 #[derive(Component)]
@@ -23,56 +24,67 @@ pub struct Tile;
 
 /// Resource to track which subpixels are currently rendered in the terrain
 /// Objects will only be visible if their subpixel is in this set
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Clone)]
 pub struct RenderedSubpixels {
-    pub subpixels: std::collections::HashSet<(usize, usize, usize)>,
-    pub center_i: usize,
-    pub center_j: usize, 
-    pub center_k: usize,
-    pub max_distance: usize,
+    pub subpixels: Vec<(usize, usize, usize, [(f64, f64); 4])>,
+    
 }
 
 /// Resource to map triangle indices to their corresponding subpixel coordinates
 /// Each index i in the vector corresponds to triangle i, and contains the (i,j,k) subpixel coordinates
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Clone)]
 pub struct TriangleSubpixelMapping {
     pub triangle_to_subpixel: Vec<(usize, usize, usize)>,
-    pub mesh_generation_time: f64,
-    pub terrain_center_lon: f64,
-    pub terrain_center_lat: f64,
 }
 
-/// Performance tracking resource
-#[derive(Resource, Default)]
-pub struct PerformanceStats {
-    pub _visible_landscape_elements: usize, // Prefixed with _ to indicate intentionally unused
-    pub _total_landscape_elements: usize,
-    pub _culled_by_distance: usize,
-    pub _culled_by_terrain: usize,
+impl TriangleSubpixelMapping {
+    pub fn new() -> Self {
+        Self {
+            triangle_to_subpixel: Vec::new(),
+        }
+    }
 }
 
 impl RenderedSubpixels {
     pub fn new() -> Self {
         Self {
-            subpixels: std::collections::HashSet::new(),
-            center_i: 0,
-            center_j: 0,
-            center_k: 0,
-            max_distance: 0,
+            subpixels: Vec::new(),
         }
     }
-    
-    pub fn is_visible(&self, i: usize, j: usize, k: usize) -> bool {
-        self.subpixels.contains(&(i, j, k))
-    }
+
     
     pub fn update_rendered_subpixels(&mut self, subpixels: &[(usize, usize, usize, [(f64, f64); 4])]) {
         self.subpixels.clear();
         for (i, j, k, _corners) in subpixels {
-            self.subpixels.insert((*i, *j, *k));
+            self.subpixels.push((*i, *j, *k, *_corners));
         }
     }
 }
+
+pub fn ijk_to_world(
+    i: i32, 
+    j: i32, 
+    k: i32, 
+    planisphere: &crate::planisphere::Planisphere, 
+    terrain_center: &TerrainCenter
+) -> Vec3 {
+    // Use the proper subpixel_to_geo method instead of manually averaging corners
+    // This handles edge cases like longitude discontinuities correctly
+    let (center_lon, center_lat) = planisphere.subpixel_to_geo(i as usize, j as usize, k as usize);
+    
+    // Convert the geographic center to world coordinates using the same method as terrain generation
+    let (world_x, world_y) = planisphere.geo_to_gnomonic(
+        center_lon, 
+        center_lat, 
+        terrain_center.longitude, 
+        terrain_center.latitude
+    );
+    
+    // Return as Vec3 (Y=0 for ground level, could be modified for elevation)
+    Vec3::new(world_x as f32 + 0.5 * planisphere.mean_tile_size as f32, 0.0, world_y as f32 + 0.5 * planisphere.mean_tile_size as f32)
+}
+
+
 
 /// Generate a deterministic random value (0.0 to 1.0) based on (i,j,k) coordinates
 /// This ensures consistent landscape element placement across terrain regenerations
@@ -259,7 +271,7 @@ pub fn determine_landscape_element_from_rgba(_red: f64, _green: f64, _blue: f64,
 pub fn select_texture_from_rgba(red: f64, _green: f64, _blue: f64, _alpha: f64) -> usize {
     // Current implementation: Simple red-channel-based texture selection
     // Maps red values to texture indices using threshold ranges
-    let alpha = 1.0 - _alpha;
+    let alpha = _alpha;
     let texture_index = if alpha < 0.1 {
         0  // Very dark alpha -> texture 0 (e.g., deep water)
     } else if alpha < 0.2 {
@@ -324,85 +336,26 @@ pub fn create_terrain_simple(
 }
 
 
-/// Create terrain using rectangular (Chebyshev) distance pattern
-pub fn create_terrain_gnomonic_rectangular(
-    commands: &mut Commands,
-    meshes: &mut ResMut<Assets<Mesh>>,
-    materials: &mut ResMut<Assets<StandardMaterial>>,
-    asset_server: &Res<AssetServer>,
-    max_subpixel_render_distance: usize,
+pub fn terrain_mesh(
     planisphere: &planisphere::Planisphere,
-    terrain_center: &TerrainCenter, // Terrain center resource
-    rendered_subpixels: Option<&mut ResMut<RenderedSubpixels>>,
-    triangle_mapping: Option<&mut ResMut<TriangleSubpixelMapping>>,
-    asset_tracker: Option<&mut ResMut<crate::TerrainAssetTracker>>,
-) {
-    create_terrain_gnomonic_with_distance_method(
-        commands, meshes, materials, asset_server, max_subpixel_render_distance,
-        planisphere, terrain_center, rendered_subpixels, triangle_mapping,
-        crate::planisphere::DistanceMethod::Chebyshev,
-        asset_tracker,
-    )
-}
+    terrain_center: &mut TerrainCenter,
+) ->    (Vec<[f32; 3]>, Vec<u32>, Vec<[f32; 2]>) { // (vertices, indices, uvs)    
 
-
-pub fn create_terrain_gnomonic_with_distance_method(
-    commands: &mut Commands,
-    meshes: &mut ResMut<Assets<Mesh>>,
-    materials: &mut ResMut<Assets<StandardMaterial>>,
-    asset_server: &Res<AssetServer>,
-    max_subpixel_render_distance: usize,       // Maximum subpixel distance from center
-    planisphere: &planisphere::Planisphere, // Reference to planisphere
-    terrain_center: &TerrainCenter, // Terrain center resource
-    rendered_subpixels: Option<&mut ResMut<RenderedSubpixels>>, // Optional resource to update
-    triangle_mapping: Option<&mut ResMut<TriangleSubpixelMapping>>, // Optional triangle mapping to update
-    distance_method: crate::planisphere::DistanceMethod, // Distance calculation method
-    mut asset_tracker: Option<&mut ResMut<crate::TerrainAssetTracker>>, // Optional asset tracker for cleanup
-) {
-    // Use the provided center coordinates for terrain generation
-    let (actual_center_lon, actual_center_lat) = (terrain_center.longitude, terrain_center.latitude);
-    println!("Creating terrain with center: Lat: {:.6}°, Lon: {:.6}°", actual_center_lat, actual_center_lon);
-    
-    // Find the corresponding subpixel coordinates for the terrain center
-    let (center_i, center_j, center_k) = planisphere.geo_to_subpixel(actual_center_lon, actual_center_lat);
-    
-    // Get subpixels using the specified distance method
-    let subpixels = planisphere.get_subpixels_by_distance_method(center_i, center_j, center_k, max_subpixel_render_distance, distance_method);
-    println!("Generated {} subpixels within distance {} using method {:?}", subpixels.len(), max_subpixel_render_distance, distance_method);
-    
-    if subpixels.is_empty() {
-        println!("ERROR: No subpixels generated! Falling back to simple terrain.");
-        create_terrain_simple(commands, meshes, materials);
-        return;
-    }
-    
-    // Update the rendered subpixels resource if provided
-    if let Some(rendered_subpixels) = rendered_subpixels {
-        rendered_subpixels.center_i = center_i;
-        rendered_subpixels.center_j = center_j;
-        rendered_subpixels.center_k = center_k;
-        rendered_subpixels.max_distance = max_subpixel_render_distance;
-        rendered_subpixels.update_rendered_subpixels(&subpixels);
-        println!("Updated RenderedSubpixels resource with {} subpixels", subpixels.len());
-    }
-    
-    // Create single mesh with all subpixels
-    let mut vertices = Vec::new();
-    let mut indices = Vec::new();
+    let mut vertices = Vec::<[f32; 3]>::new();
+    let mut indices = Vec::<u32>::new();
+    let mut uvs = Vec::<[f32; 2]>::new();
     let mut vertex_index = 0u32;
-    let mut uvs = Vec::new();
-    
-    // Initialize triangle-to-subpixel mapping if provided
-    let mut triangle_to_subpixel = Vec::new();
-    
-    for (_i, _j, _k, corners) in &subpixels {
+    let t0 = std::time::Instant::now();
+    terrain_center.triangle_mapping.triangle_to_subpixel.clear();
+    for (_i, _j, _k, _corners) in terrain_center.rendered_subpixels.subpixels.iter() {
         let (i, j, k) = (*_i, *_j, *_k);
+        let corners = *_corners;
         let current_pixel_norm_lat = j as f64 / planisphere.height_pixels as f64;
         let current_latitude = current_pixel_norm_lat * 180.0 - 90.0;
         let current_lon_subdivisions = (planisphere.subpixel_divisions as f64 * current_latitude.to_radians().cos()).max(1.0) as usize;
-        // Create vertices for this subpixel
+                // Create vertices for this subpixel
         for (lon, lat) in corners.iter() {
-            let (x, y) = planisphere.geo_to_gnomonic(*lon, *lat, actual_center_lon, actual_center_lat);
+            let (x, y) = planisphere.geo_to_gnomonic(*lon, *lat, terrain_center.longitude, terrain_center.latitude);
             vertices.push([x as f32, 0.0, y as f32]);
         }
         let atlas_size = 16; // 16x16 grid
@@ -413,13 +366,6 @@ pub fn create_terrain_gnomonic_with_distance_method(
         let tile_index = if use_rgba_texture_selection {
             // RGBA-based texture selection
             let (red, green, blue, alpha) = planisphere.get_rgba_at_subpixel(i, j, k);
-            
-            // Debug output for first few subpixels
-            if vertex_index < 20 {
-                println!("Subpixel ({},{},{}) RGBA: ({:.3},{:.3},{:.3},{:.3})", 
-                         i, j, k, red, green, blue, alpha);
-            }
-            
             select_texture_from_rgba(red, green, blue, alpha)
         } else {
             // Original border-based texture selection
@@ -467,13 +413,24 @@ pub fn create_terrain_gnomonic_with_distance_method(
         ]);
         
         // Map both triangles to this subpixel (i, j, k)
-        triangle_to_subpixel.push((i, j, k)); // Triangle 1
-        triangle_to_subpixel.push((i, j, k)); // Triangle 2
+        terrain_center.triangle_mapping.triangle_to_subpixel.push((i, j, k)); // Triangle 1
+        terrain_center.triangle_mapping.triangle_to_subpixel.push((i, j, k)); // Triangle 2
         
         vertex_index += 4;
     }
-    
-    // Create collision data for physics BEFORE moving vertices
+    let t1 = std::time::Instant::now();
+    println!("Mesh generation took {:.3} ms", (t1 - t0).as_secs_f64() * 1000.0);
+    (vertices, indices, uvs)
+}
+
+
+
+fn terrain_collider(
+    vertices: &Vec<[f32; 3]>,
+    indices: &Vec<u32>,
+
+) -> (Collider, Vec<[u32; 3]>) {
+        let t0 = std::time::Instant::now();
     let vertices_for_collider: Vec<Vec3> = vertices.iter()
         .map(|v| Vec3::new(v[0], v[1], v[2]))
         .collect();
@@ -492,13 +449,85 @@ pub fn create_terrain_gnomonic_with_distance_method(
             Collider::cuboid(25.0, 0.1, 25.0)  // Simple fallback collider
         }
     };
+    let t1 = std::time::Instant::now();
+    println!("Collider generation took {:.3} ms", (t1 - t0).as_secs_f64() * 1000.0);
+    (trimesh_collider, triangles)
+}
+
+
+
+
+
+/// Create terrain using rectangular (Chebyshev) distance pattern
+pub fn create_terrain_gnomonic_rectangular(
+    commands: &mut Commands,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<StandardMaterial>>,
+    asset_server: &Res<AssetServer>,
+    planisphere: &planisphere::Planisphere,
+    terrain_center: &mut TerrainCenter, // Terrain center resource (mutable)
+    asset_tracker: Option<&mut ResMut<crate::TerrainAssetTracker>>,
+    time: &Res<Time>,
+) {
+    create_terrain_gnomonic_with_distance_method(
+        commands, meshes, materials, asset_server,
+        planisphere, terrain_center, 
+        crate::planisphere::DistanceMethod::Chebyshev,
+        asset_tracker,
+        time,
+    )
+}
+
+
+pub fn create_terrain_gnomonic_with_distance_method(
+    commands: &mut Commands,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<StandardMaterial>>,
+    asset_server: &Res<AssetServer>,
+    planisphere: &planisphere::Planisphere, // Reference to planisphere
+    terrain_center: &mut TerrainCenter, // Terrain center resource (mutable to store data)
+    distance_method: crate::planisphere::DistanceMethod, // Distance calculation method
+    mut asset_tracker: Option<&mut ResMut<crate::TerrainAssetTracker>>, // Optional asset tracker for cleanup
+    time: &Res<Time>
+) {
+
+    // Get subpixels using the specified distance method
+    let t0 = std::time::Instant::now();
+    let subpixels = planisphere.get_subpixels_by_distance_method(
+        terrain_center.subpixel.0, 
+        terrain_center.subpixel.1, 
+        terrain_center.subpixel.2, 
+        terrain_center.max_subpixel_distance, 
+        distance_method);
+
+    println!("Generated {} subpixels within distance {} using method {:?}", subpixels.len(), terrain_center.max_subpixel_distance, distance_method);
+    let t1 = std::time::Instant::now();
+    println!("Subpixel generation took {:.3} ms", (t1 - t0).as_secs_f64() * 1000.0);
+
+    if subpixels.is_empty() {
+        println!("ERROR: No subpixels generated! Falling back to simple terrain.");
+        create_terrain_simple(commands, meshes, materials);
+        return;
+    }
+    else {
+        terrain_center.rendered_subpixels.update_rendered_subpixels(&subpixels);
+    }
+    
+    let t0 = std::time::Instant::now();
+    // Update the rendered subpixels in terrain_center
+    
+    let (vertices, indices, uvs) = terrain_mesh(planisphere, terrain_center);
+    let t1 = std::time::Instant::now();
+    println!("Vertex processing took {:.3} ms for {} subpixels", (t1 - t0).as_secs_f64() * 1000.0, subpixels.len());
+
+   
+    
+    let (trimesh_collider, triangles) = terrain_collider(&vertices, &indices);
     
     println!("Physics collider created with {} triangles (should match mapping size)", triangles.len());
-    println!("Triangle index range: 0 to {}", triangles.len() - 1);
-    println!("First few triangles: {:?}", &triangles[0..5.min(triangles.len())]);
-    println!("Last few triangles: {:?}", &triangles[triangles.len().saturating_sub(5)..]);
-
     // Create the combined mesh
+
+    let t0 = std::time::Instant::now();
     let mut terrain_mesh = Mesh::new(
         bevy::render::mesh::PrimitiveTopology::TriangleList,
         bevy::render::render_asset::RenderAssetUsages::default()
@@ -511,7 +540,8 @@ pub fn create_terrain_gnomonic_with_distance_method(
     terrain_mesh.compute_smooth_normals();
     
     let terrain_mesh_handle = meshes.add(terrain_mesh);
-    
+    let t1 = std::time::Instant::now();
+    println!("Mesh creation took {:.3} ms for {} vertices and {} triangles", (t1 - t0).as_secs_f64() * 1000.0, vertex_count, triangle_count);   
     // === TEXTURE ATLAS LOADING ===
     // Load the 256x256 pixel texture atlas containing all terrain textures
     // This atlas is a 16x16 grid where each 16x16 pixel tile represents a different terrain type
@@ -580,19 +610,14 @@ pub fn create_terrain_gnomonic_with_distance_method(
     
     println!("Spawned terrain entity: {:?}", terrain_entity);
     
-    // Update triangle mapping resource if provided
-    if let Some(triangle_mapping) = triangle_mapping {
-        triangle_mapping.triangle_to_subpixel = triangle_to_subpixel;
-        triangle_mapping.mesh_generation_time = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs_f64();
-        triangle_mapping.terrain_center_lon = actual_center_lon;
-        triangle_mapping.terrain_center_lat = actual_center_lat;
-        println!("Updated triangle mapping with {} triangles for terrain center ({:.6}, {:.6})", 
-            triangle_mapping.triangle_to_subpixel.len(), actual_center_lon, actual_center_lat);
-    }
-    
+    let t0 = std::time::Instant::now();
+    // Update triangle mapping in terrain_center
+    //terrain_center.triangle_mapping.triangle_to_subpixel = triangle_to_subpixel;
+    println!("Updated triangle mapping with {} triangles for terrain center ({:.6}, {:.6})", 
+        terrain_center.triangle_mapping.triangle_to_subpixel.len(), terrain_center.longitude, terrain_center.latitude);
+    let t1 = std::time::Instant::now();
+    println!("Triangle mapping update took {:.3} ms", (t1 - t0).as_secs_f64() * 1000.0);
+
     println!("=== TERRAIN MESH DEBUG ===");
     println!("Generated single terrain mesh with {} vertices", vertex_count);
     println!("Mesh has {} triangles", triangle_count);
@@ -605,6 +630,7 @@ pub fn create_terrain_gnomonic_with_distance_method(
 /// Regular objects use full terrain visibility, agents use 2/3 radius visibility
 pub fn manage_object_visibility(
     rendered_subpixels: Res<RenderedSubpixels>,
+    terrain_center: Res<TerrainCenter>,
     mut regular_objects: Query<(&mut Visibility), (Without<Tile>, Without<PlayerTileBeacon>, Without<crate::agent::Agent>)>,
     mut agents: Query<(&mut Visibility), With<crate::agent::Agent>>,
 ) {
@@ -616,7 +642,7 @@ pub fn manage_object_visibility(
         }
         
         // Handle agents (2/3 radius visibility based on terrain mesh size)
-        let agent_max_distance = (rendered_subpixels.max_distance as f64 * 2.0 / 3.0) as usize;
+        let agent_max_distance = (terrain_center.max_subpixel_distance as f64 * 2.0 / 3.0) as usize;
         let mut visible_agents = 0;
         let mut total_agents = 0;
         
@@ -624,9 +650,9 @@ pub fn manage_object_visibility(
             total_agents += 1;
             let subpixel_pos = (0,0,0); // Placeholder for agent subpixel position
             // Calculate distance from terrain center to agent position using the same method as terrain generation
-            let center_i = rendered_subpixels.center_i;
-            let center_j = rendered_subpixels.center_j;
-            let center_k = rendered_subpixels.center_k;
+            let center_i = terrain_center.subpixel.0;
+            let center_j = terrain_center.subpixel.1;
+            let center_k = terrain_center.subpixel.2;
             
             let dist_i = if subpixel_pos.0 > center_i { subpixel_pos.0 - center_i } else { center_i - subpixel_pos.0 };
             let dist_j = if subpixel_pos.1 > center_j { subpixel_pos.1 - center_j } else { center_j - subpixel_pos.1 };
@@ -671,7 +697,7 @@ pub fn manage_object_visibility(
 }
 
 /// Resource to track terrain center changes for object repositioning
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Clone)]
 pub struct TerrainCenter {
     pub longitude: f64,
     pub latitude: f64,
@@ -680,6 +706,8 @@ pub struct TerrainCenter {
     pub max_subpixel_distance: usize,
     pub last_recreation_time: f32,
     pub terrain_recreated: bool,
+    pub rendered_subpixels: RenderedSubpixels,
+    pub triangle_mapping: TriangleSubpixelMapping,
 }
 
 impl TerrainCenter {
@@ -692,9 +720,21 @@ impl TerrainCenter {
             max_subpixel_distance: 62,
             last_recreation_time: -10.0,
             terrain_recreated: false,
+            rendered_subpixels: RenderedSubpixels::new(),
+            triangle_mapping: TriangleSubpixelMapping::new(),
         }
     }
+
+    pub fn set_ijk(&mut self, i: usize, j: usize, k: usize, planisphere: &planisphere::Planisphere) {
+        self.subpixel = (i, j, k);
+        self.longitude = planisphere.subpixel_to_geo(i, j, k).0;
+        self.latitude = planisphere.subpixel_to_geo(i, j, k).1;
+        let current_time = std::time::Instant::now().elapsed().as_secs_f32();
+        self.last_recreation_time = current_time;
+    }
     
+    /// Resets the `terrain_recreated` flag to false after terrain recreation is complete.
+    /// This flag is used to signal to other systems that terrain recreation has finished.
     pub fn reset_flag(&mut self) {
         self.terrain_recreated = false;
     }

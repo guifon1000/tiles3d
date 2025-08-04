@@ -49,12 +49,12 @@ impl Planisphere {
     /// * `width_pixels` - Number of horizontal grid points
     /// * `height_pixels` - Number of vertical grid points
     /// * `subpixel_divisions` - Number of subdivisions within each grid cell
-    pub fn new(width_pixels: usize, height_pixels: usize, subpixel_divisions: usize, radius: f64) -> Self {
+    pub fn new(width_pixels: usize, height_pixels: usize, subpixel_divisions: usize) -> Self {
         Planisphere {
             width_pixels,
             height_pixels,
             subpixel_divisions,
-            radius,
+            radius: 1.0,
             mean_tile_size: 0.0, // Default value, can be set later
             elevation_grid: Array2::<f64>::zeros((width_pixels, height_pixels)),
             sea_mask: Array2::from_elem((width_pixels, height_pixels), false),
@@ -64,6 +64,11 @@ impl Planisphere {
             blue_channel: Array2::<f64>::zeros((width_pixels, height_pixels)),
             alpha_channel: Array2::<f64>::ones((width_pixels, height_pixels)),
         }
+    }
+
+    pub fn set_radius(&mut self, radius: f64) {
+        self.radius = radius;
+        self.compute_mean_tile_size();
     }
     
     pub fn get_lon_subdivisons(&self, latitude: f64) -> usize {
@@ -79,18 +84,17 @@ impl Planisphere {
     ///
     /// # Returns
     /// * `Result<Self, image::ImageError>` - A new Planisphere with dimensions matching the image, or an error
-    pub fn from_elevation_map(filename: &str, subpixel_divisions: usize, radius: f64) -> Result<Self> {
+    pub fn from_elevation_map(filename: &str, subpixel_divisions: usize) -> Result<Self> {
         let img = image::open(filename)?;
         let (width_pixels, height_pixels) = img.dimensions();
         eprintln!("Loaded elevation map: {}x{}", width_pixels, height_pixels);
-        let mut planisphere = Self::new(width_pixels as usize, height_pixels as usize, subpixel_divisions, radius);
+        let mut planisphere = Self::new(width_pixels as usize, height_pixels as usize, subpixel_divisions);
         eprintln!("Creating Planisphere with dimensions: {}x{}", planisphere.width_pixels, planisphere.height_pixels);
         planisphere.elevation_map = Some(img);
         
         // Initialize elevation grid and sea mask based on the image
         planisphere.process_elevation_data();
         eprintln!("Processed elevation data for Planisphere");
-        planisphere.compute_mean_tile_size();
         Ok(planisphere)
     }
     
@@ -216,6 +220,7 @@ impl Planisphere {
         let (world2_x, world2_y) = geo_to_gnomonic_helper(lon2, lat2, 0.0, 0.0, &self);
         self.mean_tile_size = ((world2_x - world1_x).abs() + (world2_y - world1_y).abs()) as f64;
     }
+
 
 
 
@@ -843,7 +848,7 @@ impl Planisphere {
     
     /// Get subpixels within a rectangular region
     /// This provides a simple rectangular selection pattern
-    pub fn get_subpixels_by_rectangular_distance(&self, center_i: usize, center_j: usize, center_k: usize, max_subpixel_distance: usize) 
+    pub fn get_subpixels_by_rectangular_distanceXXXXX(&self, center_i: usize, center_j: usize, center_k: usize, max_subpixel_distance: usize) 
         -> Vec<(usize, usize, usize, [(f64, f64); 4])> {
         let mut result = Vec::new();
         
@@ -858,7 +863,6 @@ impl Planisphere {
         
         // Get all subpixels in the pixel grid
         let subpixels = self.get_subpixels_in_rectangle(min_i, max_i, min_j, max_j);
-        
         // Add the center subpixel first
         result.push((center_i, center_j, center_k, self.get_subpixel_corners(center_i, center_j, center_k)));
         
@@ -892,17 +896,86 @@ impl Planisphere {
             let chebyshev_distance = dx.max(dy);
             
             // Include if within the maximum subpixel distance
-            if chebyshev_distance <= max_subpixel_distance as f64 {
+            //if chebyshev_distance <= max_subpixel_distance as f64 {
                 result.push((i, j, k, corners));
-            }
+            //}
         }
         
         result
     }
     
+
+
+pub fn get_subpixels_by_rectangular_distance(&self, center_i: usize, center_j: usize, center_k: usize, max_subpixel_distance: usize) 
+        -> Vec<(usize, usize, usize, [(f64, f64); 4])> {
+        let mut result = Vec::new();
+        let (longitude, latitude) = self.subpixel_to_geo(center_i, center_j, center_k);
+        // Calculate how many pixels we need to include in each direction
+        let pixel_radius_y = (max_subpixel_distance / self.subpixel_divisions) + 1;
+        let pixel_radius_x = (max_subpixel_distance / self.get_lon_subdivisons(latitude)) + 1;
+        
+        // Get the grid of pixels centered on the player's pixel
+        let min_i = if center_i > pixel_radius_x { center_i - pixel_radius_x } else { 0 };
+        let max_i = center_i + pixel_radius_x;
+        let min_j = if center_j > pixel_radius_y { center_j - pixel_radius_y } else { 0 };
+        let max_j = std::cmp::min(center_j + pixel_radius_y, self.height_pixels - 1);
+        
+        // Get all subpixels in the pixel grid
+        let subpixels = self.get_subpixels_in_rectangle(min_i, max_i, min_j, max_j);
+        // Add the center subpixel first
+        result.push((center_i, center_j, center_k, self.get_subpixel_corners(center_i, center_j, center_k)));
+        
+        // Pre-allocate with approximate capacity
+        let approx_subpixels_per_pixel = self.subpixel_divisions * self.subpixel_divisions;
+        let approx_total = (max_i - min_i + 1) * (max_j - min_j + 1) * approx_subpixels_per_pixel;
+        result.reserve(approx_total);
+        
+        // Convert center coordinates to continuous subpixel coordinates
+        let center_sub_i = center_k / self.subpixel_divisions;
+        let center_sub_j = center_k % self.subpixel_divisions;
+        let center_continuous_i = (center_i * self.subpixel_divisions + center_sub_i) as f64;
+        let center_continuous_j = (center_j * self.subpixel_divisions + center_sub_j) as f64;
+        
+        // Use Chebyshev distance (max of dx, dy) for rectangular pattern
+        for (i, j, k, corners) in subpixels {
+            // Skip the center (already added)
+            if i == center_i && j == center_j && k == center_k {
+                continue;
+            }
+            
+            // Convert current coordinates to continuous subpixel coordinates
+            let sub_i = k / self.subpixel_divisions;
+            let sub_j = k % self.subpixel_divisions;
+            let continuous_i = (i * self.subpixel_divisions + sub_i) as f64;
+            let continuous_j = (j * self.subpixel_divisions + sub_j) as f64;
+            
+            // Calculate Chebyshev distance (rectangular pattern)
+            let dx = (continuous_i - center_continuous_i).abs();
+            let dy = (continuous_j - center_continuous_j).abs();
+            let chebyshev_distance = dx.max(dy);
+            
+            // Include if within the maximum subpixel distance
+            //if chebyshev_distance <= max_subpixel_distance as f64 {
+                result.push((i, j, k, corners));
+            //}
+        }
+        
+        result
+    }
+
+
+
+
+
+
+
+
+
+
+
     /// Get subpixels using the specified distance calculation method
     /// This provides a unified interface for different selection patterns
-    pub fn get_subpixels_by_distance_method(
+    pub fn  get_subpixels_by_distance_method(
         &self, 
         center_i: usize, 
         center_j: usize, 

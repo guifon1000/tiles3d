@@ -1,7 +1,8 @@
 use bevy::prelude::*;
 use crate::planisphere;
-use crate::player::{EntitySubpixelPosition, Player};
+use crate::player::Player;
 use crate::terrain::TerrainCenter;
+use crate::game_object::EntitySubpixelPosition;
 
 /// Component to mark the coordinate display text entity
 #[derive(Component)]

@@ -1,9 +1,9 @@
 
 use bevy::prelude::*;
 use bevy_rapier3d::prelude::*;
-use crate::player::{calculate_subpixel_center_world_position, Player, EntitySubpixelPosition};
+use crate::player::Player;
 use crate::planisphere::{self, Planisphere};
-use crate::terrain::TerrainCenter;
+use crate::terrain::{self, ijk_to_world, TerrainCenter};
 
 
 trait IntoWorldPosition{
@@ -18,10 +18,32 @@ impl IntoWorldPosition for Vec3 {
 
 impl IntoWorldPosition for (usize, usize, usize) {
     fn into_world_position(&self, planisphere: &planisphere::Planisphere, terrain_center: &crate::terrain::TerrainCenter) -> Vec3 {
-        calculate_subpixel_center_world_position(self.0 as i32, self.1 as i32, self.2 as i32, planisphere, terrain_center)
+        ijk_to_world(self.0 as i32, self.1 as i32, self.2 as i32, planisphere, terrain_center)
     }
 }
 
+/// Shared component for entities that use raycast positioning
+#[derive(Component, Clone, Debug)]
+pub struct EntitySubpixelPosition {
+    pub subpixel: (usize, usize, usize),
+    pub geo_coords: (f64, f64),
+    pub world_pos: Vec3,
+    pub previous_subpixel: (usize, usize, usize),
+    pub last_raycast_time: f32,
+}
+
+
+impl Default for EntitySubpixelPosition {
+    fn default() -> Self {
+        Self {
+            subpixel: (256, 128, 0),
+            geo_coords: (0.0, 0.0),
+            world_pos: Vec3::ZERO,
+            previous_subpixel: (256, 128, 0),
+            last_raycast_time: 0.0,
+        }
+    }
+}
 
 #[derive(Component)]
 pub struct SubpixelTextTag;
@@ -318,7 +340,7 @@ pub fn cleanup_orphaned_overlays(
 pub fn raycast_tile_locator_system(
     mut query: Query<(Entity, &Transform, &mut RaycastTileLocator, &mut EntitySubpixelPosition, &mut ObjectDefinition)>,
     rapier_context: ReadRapierContext,
-    triangle_mapping: Res<crate::terrain::TriangleSubpixelMapping>,
+    mut terrain_center: ResMut<TerrainCenter>,
     terrain_entities: Query<Entity, With<crate::terrain::Tile>>,
 ) {
     let Ok(ctx) = rapier_context.single() else { return; };
@@ -352,8 +374,8 @@ pub fn raycast_tile_locator_system(
                     }
                 };
                 // Apply same offset detection as green marker
-                let adjusted_triangle_index = if triangle_index >= triangle_mapping.triangle_to_subpixel.len() as u32 {
-                    let mapping_size = triangle_mapping.triangle_to_subpixel.len() as u32;
+                let adjusted_triangle_index = if triangle_index >= terrain_center.triangle_mapping.triangle_to_subpixel.len() as u32 {
+                    let mapping_size = terrain_center.triangle_mapping.triangle_to_subpixel.len() as u32;
                     let potential_offset = (triangle_index / mapping_size) * mapping_size;
                     let corrected_index = triangle_index - potential_offset;
                     
@@ -365,7 +387,7 @@ pub fn raycast_tile_locator_system(
                 } else {
                     triangle_index
                 };
-                let _subpixel_position = triangle_mapping.triangle_to_subpixel[adjusted_triangle_index as usize];
+                let _subpixel_position = terrain_center.triangle_mapping.triangle_to_subpixel[adjusted_triangle_index as usize];
                 subpixel_position.subpixel.0 = _subpixel_position.0;
                 subpixel_position.subpixel.1 = _subpixel_position.1;
                 subpixel_position.subpixel.2 = _subpixel_position.2;

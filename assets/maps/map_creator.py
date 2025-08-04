@@ -255,12 +255,13 @@ def generate_sphere_texture(seed, nx, ny, output_filename="sphere_texture.png", 
 def main():
     # Parameters
     seed = 42
-    nx = int(8640/8) # Width (longitude)
-    ny = int(nx/2)  # Height (latitude)
+
+    ny = int(64)  # Height (latitude)
+    nx = int(2 * ny) # Width (longitude)
     
     # Optional: Path to image for 4th channel (grayscale values)
     # Set to None to use Perlin noise, or provide a path to use an image
-    fourth_channel_image_path = "mask.jpg"  # Example: "grayscale_mask.png"
+    fourth_channel_image_path = "elevation.jpg"  # Example: "grayscale_mask.png"
     
     # You can uncomment and modify the line below to use an image for 4th channel:
     # fourth_channel_image_path = "your_grayscale_image.png"

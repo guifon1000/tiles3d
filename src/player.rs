@@ -9,12 +9,13 @@ use bevy_rapier3d::plugin::context::systemparams::ReadRapierContext;
 use bevy::input::mouse::{MouseMotion, MouseButton}; 
 
 // Mouse movement events
-use crate::terrain::{RenderedSubpixels, Tile, TerrainCenter, entities_in_rendered_subpixels}; // Import Tile component and resources from terrain module
+use crate::terrain::{RenderedSubpixels, Tile, TerrainCenter, entities_in_rendered_subpixels, ijk_to_world}; // Import Tile component and resources from terrain module
 use crate::landscape::Item; // Import Item from landscape module
 // use crate::TerrainConfig;
 use crate::planisphere::{self}; // Import planisphere for coordinate conversion
 use crate::game_object::{ObjectTemplate, CollisionBehavior, 
-                        spawn_template_scene, ObjectDefinition, ObjectTemplates, MouseTrackerObject}; // Import game object definitions
+                        spawn_template_scene, ObjectDefinition, 
+                        ObjectTemplates, MouseTrackerObject, EntitySubpixelPosition}; // Import game object definitions
 // Note: Terrain configuration is now accessed via TerrainConfig resource instead of constants
 // use crate::agent::Agent; // Import Agent component for shared positioning
 
@@ -74,29 +75,8 @@ pub struct RayIntersectionMarker;
 #[derive(Component)]
 pub struct TriangleSubpixelMarker;
 
-/// Shared trait for entities that have positioning capabilities
 
-/// Shared component for entities that use raycast positioning
-#[derive(Component, Clone, Debug)]
-pub struct EntitySubpixelPosition {
-    pub subpixel: (usize, usize, usize),
-    pub geo_coords: (f64, f64),
-    pub world_pos: Vec3,
-    pub previous_subpixel: (usize, usize, usize),
-    pub last_raycast_time: f32,
-}
 
-impl Default for EntitySubpixelPosition {
-    fn default() -> Self {
-        Self {
-            subpixel: (256, 128, 0),
-            geo_coords: (0.0, 0.0),
-            world_pos: Vec3::ZERO,
-            previous_subpixel: (256, 128, 0),
-            last_raycast_time: 0.0,
-        }
-    }
-}
 
 pub fn detect_mouse_clicks(
     mut commands: Commands,
@@ -197,14 +177,14 @@ pub fn drop_stone(
                 let mousetracker_subpixel = mousetracker_ijkpos.subpixel;
                 let player_subpixel = player_ijkpos.subpixel;
                 // Calculate the world position of the subpixel center
-                let mousetracker_world_pos = calculate_subpixel_center_world_position(
+                let mousetracker_world_pos = ijk_to_world(
                     mousetracker_subpixel.0 as i32, 
                     mousetracker_subpixel.1 as i32, 
                     mousetracker_subpixel.2 as i32, 
                     &planisphere, 
                     &terrain_center
                 );
-                let player_world_pos = calculate_subpixel_center_world_position(
+                let player_world_pos = ijk_to_world(
                     player_subpixel.0 as i32, 
                     player_subpixel.1 as i32, 
                     player_subpixel.2 as i32, 
@@ -224,7 +204,7 @@ pub fn drop_stone(
                     angvel: Vec3::ZERO,
                 };
                 let physics_bundle = (
-                    RigidBody::Dynamic,
+                    RigidBody::Fixed,
                     crate::game_object::create_collider_from_shape(&crate::game_object::ObjectShape::Cube { size: Vec3::ONE }),
                     velocity,
                     ExternalImpulse::default(),
@@ -242,7 +222,8 @@ pub fn drop_stone(
                     &planisphere,
                     &terrain_center,
                     template,
-                    player_transform.translation + player_to_target * 0.5, // Position it halfway between player and mouse tracker
+                    //player_transform.translation + player_to_target * 0.5, // Position it halfway between player and mouse tracker
+                    player_ijkpos.subpixel, // Position it halfway between player and mouse tracker
                     player_transform.translation.y + template.y_offset, // Use player's Y position + offset
                     CollisionBehavior::Dynamic, // Set collision behavior to dynamic for dropped items
                     (physics_bundle, 
@@ -257,56 +238,10 @@ pub fn drop_stone(
 
 
 
-pub fn calculate_subpixel_center_world_position(
-    i: i32, 
-    j: i32, 
-    k: i32, 
-    planisphere: &crate::planisphere::Planisphere, 
-    terrain_center: &crate::player::TerrainCenter
-) -> Vec3 {
-    // Use the proper subpixel_to_geo method instead of manually averaging corners
-    // This handles edge cases like longitude discontinuities correctly
-    let (center_lon, center_lat) = planisphere.subpixel_to_geo(i as usize, j as usize, k as usize);
-    
-    // Convert the geographic center to world coordinates using the same method as terrain generation
-    let (world_x, world_y) = planisphere.geo_to_gnomonic(
-        center_lon, 
-        center_lat, 
-        terrain_center.longitude, 
-        terrain_center.latitude
-    );
-    
-    // Return as Vec3 (Y=0 for ground level, could be modified for elevation)
-    Vec3::new(world_x as f32 + 0.5 * planisphere.mean_tile_size as f32, 0.0, world_y as f32 + 0.5 * planisphere.mean_tile_size as f32)
-}
 
 
 
-/// Find the closest subpixel to a world position
-fn find_closest_subpixel_to_world_point(
-    world_pos: Vec3, 
-    planisphere: &crate::planisphere::Planisphere, 
-    terrain_center: &TerrainCenter
-) -> Option<(i32, i32, i32)> {
-    // Convert world position to geographic coordinates using inverse gnomonic projection
-    let (lon, lat) = planisphere::gnomonic_to_geo_helper(
-        world_pos.x as f64, 
-        world_pos.z as f64,  // Note: Bevy uses Z for forward/back
-        terrain_center.longitude, 
-        terrain_center.latitude, 
-        planisphere.radius
-    );
-    
-    // Check if conversion was successful (not NaN)
-    if !lon.is_finite() || !lat.is_finite() {
-        return None;
-    }
-    
-    // Convert geographic coordinates to subpixel coordinates
-    let (i, j, k) = planisphere.geo_to_subpixel(lon, lat);
-    
-    Some((i as i32, j as i32, k as i32))
-}
+
 
 
 
@@ -477,7 +412,7 @@ pub fn entity_replacement_system(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut rendered_subpixels: ResMut<RenderedSubpixels>,
+    rendered_subpixels: ResMut<RenderedSubpixels>,
     object_query : Query<(Entity, &mut Transform,  &ObjectDefinition), (Without<Player>, Without<MouseTrackerObject>)>,
 
     terrain_center: ResMut<TerrainCenter>,
@@ -490,10 +425,60 @@ pub fn entity_replacement_system(
 
 
 
+fn check_terrain_need_recreation(
+    player_query: &mut Query<(Entity, &mut Transform, &EntitySubpixelPosition , &Player)>,
+    planisphere: &Res<planisphere::Planisphere>,
+    terrain_center: &ResMut<TerrainCenter>,
+) -> (bool,(usize, usize, usize)) {
+    let mut needs_recreation = false;
+    let mut next_terrain_center_tile = (0,0,0);
+    for (player_entity, player_transform, player_subpixel_position, _player) in player_query.iter_mut() {
+        let player_world_pos = player_transform.translation;
+        let center_world_pos = Vec3::new(0.0,  player_transform.translation.y, 0.0);// eprintln!("Player entity: {:?}, Position: ({:.2}, {:.2}, {:.2})", player_entity, player_transform.translation.x, player_transform.translation.y, player_transform.translation.z);
+        let distance_tiles = (player_world_pos - center_world_pos).length()/planisphere.mean_tile_size as f32;
+        if distance_tiles > 0.5 * terrain_center.max_subpixel_distance as f32 {
+            eprintln!("Player is too far from terrain center! Distance: {:.2} tiles, max allowed: {}", distance_tiles, terrain_center.max_subpixel_distance);
+            needs_recreation = true; // Set flag to recreate terrain
+            next_terrain_center_tile = player_subpixel_position.subpixel; // Use player's subpixel as new center
+    }
+    // Placeholder for actual logic to determine if terrain needs recreation
+    // This could be based on player position, time since last recreation, etc.
+}
+    (needs_recreation, next_terrain_center_tile)
+}
 
 
+pub fn reinitialize_positions(
+    mut player_query: Query<(Entity, &mut Transform, &EntitySubpixelPosition , &Player)>,
+    mut object_query: Query<(Entity, &mut Transform,  &ObjectDefinition), (Without<Player>, Without<MouseTrackerObject>)>,
+) {
+        // Store player positions and calculate the offset needed to move them to origin
+        let player_offset = if let Some((_, player_transform, _, _)) = player_query.iter().next() {
+            // The offset needed to move the player to origin
+            Vec3::new(
+                -player_transform.translation.x,
+                0.0,  // We don't change Y position (height)
+                -player_transform.translation.z
+            )
+        } else {
+            Vec3::ZERO
+        };
 
+                // Move player to origin (0, 0, 0) while keeping their Y position
+        for (_, mut player_transform, _, _) in player_query.iter_mut() {
+            player_transform.translation.x += player_offset.x;
+            player_transform.translation.z += player_offset.z;
+            // Y position remains unchanged
+        }
 
+        // Move all other objects by the same offset to maintain relative positions to player
+        for (_, mut transform, _) in object_query.iter_mut() {
+            transform.translation.x += player_offset.x;
+            transform.translation.z += player_offset.z;
+            // Y position remains unchanged
+        }
+
+    }
 
 
 /// Terrain recreation system - handles asset cleanup and terrain generation
@@ -519,16 +504,11 @@ pub fn terrain_recreation_system(
     let mut needs_recreation = false; // Default to false, will be set if conditions are met
     let mut next_terrain_center_tile = (0,0,0); // Default tile for terrain center
     // Calculate distance from terrain center
-    for (player_entity, player_transform, player_subpixel_position, _player) in player_query.iter_mut() {
-        let player_world_pos = player_transform.translation;
-        let center_world_pos = Vec3::new(0.0,  player_transform.translation.y, 0.0);// eprintln!("Player entity: {:?}, Position: ({:.2}, {:.2}, {:.2})", player_entity, player_transform.translation.x, player_transform.translation.y, player_transform.translation.z);
-        let distance_tiles = (player_world_pos - center_world_pos).length()/planisphere.mean_tile_size as f32;
-        if distance_tiles > terrain_center.max_subpixel_distance as f32 {
-            eprintln!("Player is too far from terrain center! Distance: {:.2} tiles, max allowed: {}", distance_tiles, terrain_center.max_subpixel_distance);
-            needs_recreation = true; // Set flag to recreate terrain
-            next_terrain_center_tile = player_subpixel_position.subpixel; // Use player's subpixel as new center
-    }
-}
+    (needs_recreation, next_terrain_center_tile) = check_terrain_need_recreation(
+        &mut player_query,
+        &planisphere,
+        &terrain_center
+    );
 
 
     //despawn_unified_object_from_name(&mut commands, "TerrainCenter", object_query);
@@ -540,33 +520,19 @@ pub fn terrain_recreation_system(
         println!("Player distance from terrain center exceeds threshold. Recreating terrain... (last recreation: {:.1}s ago)", time_since_last_recreation);
         
 
-        // Store player positions and calculate the offset needed to move them to origin
-        let player_offset = if let Some((_, player_transform, _, _)) = player_query.iter().next() {
-            // The offset needed to move the player to origin
-            Vec3::new(
-                -player_transform.translation.x,
-                0.0,  // We don't change Y position (height)
-                -player_transform.translation.z
-            )
-        } else {
-            Vec3::ZERO
-        };
+        reinitialize_positions(player_query, object_query);
 
 
+        terrain_center.set_ijk(
+            next_terrain_center_tile.0, 
+            next_terrain_center_tile.1, 
+            next_terrain_center_tile.2, 
+            &planisphere
+        );
 
-
-
-        // Use player's current geographic coordinates as new terrain center
-        let (new_center_lon, new_center_lat) = planisphere.subpixel_to_geo(next_terrain_center_tile.0, next_terrain_center_tile.1, next_terrain_center_tile.2 );
-        
-        // Update terrain center resource
-        terrain_center.longitude = new_center_lon;
-        terrain_center.latitude = new_center_lat;
-        terrain_center.last_recreation_time = current_time;
 
         // Clear old triangle mapping
-        triangle_mapping.triangle_to_subpixel.clear();
-        
+        terrain_center.triangle_mapping.triangle_to_subpixel.clear();
         // CRITICAL: Clean up old asset handles from Bevy's asset system to prevent memory leaks
         asset_tracker.cleanup_assets(&mut meshes, &mut materials);
         
@@ -584,41 +550,16 @@ pub fn terrain_recreation_system(
             &mut meshes,
             &mut materials,
             &asset_server,
-            40, // Use terrain radius
             &planisphere,
-            &terrain_center,
-            Some(&mut rendered_subpixels),
-            Some(&mut triangle_mapping),
-            Some(&mut asset_tracker)
+            &mut terrain_center,
+            Some(&mut asset_tracker),
+            &time
         );
 
-        // Move player to origin (0, 0, 0) while keeping their Y position
-        for (_, mut player_transform, _, _) in player_query.iter_mut() {
-            player_transform.translation.x += player_offset.x;
-            player_transform.translation.z += player_offset.z;
-            // Y position remains unchanged
-        }
 
-        // Move all other objects by the same offset to maintain relative positions to player
-        for (_, mut transform, _) in object_query.iter_mut() {
-            transform.translation.x += player_offset.x;
-            transform.translation.z += player_offset.z;
-            // Y position remains unchanged
-        }
         println!("Terrain recreation completed successfully");
-        // we need to print the 5 first elements of the triangle mapping and the first elements of the rendered subpixels
-        println!("Triangle mapping size: {}, first 5 entries: {:?}", 
-            triangle_mapping.triangle_to_subpixel.len(), 
-            &triangle_mapping.triangle_to_subpixel[..5]);
-        println!("Rendered subpixels size: {}", //
-            rendered_subpixels.subpixels.len());
-        println!("First 5 rendered subpixels:");
-        for tuple in rendered_subpixels.subpixels.iter().take(5) {
-            println!("Subpixel: ({}, {}, {})",
-                tuple.0, tuple.1, tuple.2
-            );
-        }
-        entity_replacement_system(commands, meshes, materials, rendered_subpixels, object_query, terrain_center, planisphere, object_templates);
+        // Note: cannot print triangle mapping details or rendered subpixels because they were moved into the terrain creation function
+        // entity_replacement_system(commands, meshes, materials, rendered_subpixels, object_query, terrain_center, planisphere, object_templates);
     }
 }
 

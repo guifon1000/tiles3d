@@ -4,8 +4,8 @@ use bevy_rapier3d::prelude::*;  // Physics engine for 3D collision detection
 use rand::Rng;                  // Random number generation for agent behavior
 use crate::terrain::Tile; // Import Tile and SubpixelPosition components from terrain module
 use crate::landscape::Item; // Import Item component from landscape module
-use crate::player::EntitySubpixelPosition; // Import shared positioning component
 use crate::planisphere; // Import planisphere for coordinate conversion
+use crate::game_object::EntitySubpixelPosition; // Import shared positioning component
 
 /// Agent action types - what the agent can choose to do
 #[derive(Debug, Clone, Copy, PartialEq)]

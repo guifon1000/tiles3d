@@ -1,5 +1,5 @@
 // Import statements - bring in code from external crates and our own modules
-use bevy::prelude::*;           // Bevy game engine - the * imports everything commonly used
+use bevy::{prelude::*, render::Render};           // Bevy game engine - the * imports everything commonly used
 use bevy_rapier3d::prelude::*;  // Rapier physics engine - handles collision detection and physics
 
 // Module declarations - tell Rust about our other source files
@@ -17,7 +17,7 @@ mod game_object; // game_object.rs - handles object definitions and spawning log
 
 // Import the specific functions we need from our modules
 // 'use' statements make functions available in this file without the module prefix
-use terrain::{create_terrain_gnomonic_rectangular, RenderedSubpixels, PerformanceStats, TriangleSubpixelMapping, TerrainCenter}; // Pure terrain mesh generation
+use terrain::{create_terrain_gnomonic_rectangular, RenderedSubpixels, TriangleSubpixelMapping, TerrainCenter}; // Pure terrain mesh generation
 use camera::{setup_third_person_camera, update_third_person_camera, third_person_camera_rotation, update_camera_light, handle_camera_zoom, handle_camera_height}; // Camera-related functions
 use player::{move_player, check_player_sensors, check_player_ground_sensors, terrain_recreation_system}; // Player-related functions
 use ui::{setup_ui, update_coordinate_display}; // UI setup function and coordinate display update system
@@ -49,7 +49,7 @@ pub struct TerrainAssetTracker {
 
 impl Default for TerrainConfig {
     fn default() -> Self {
-        let radius = 80; // Main terrain radius setting - change this to adjust terrain size
+        let radius = 200; // Main terrain radius setting - change this to adjust terrain size
         Self {
             terrain_radius: radius,
             recreation_threshold: radius / 4,  // Auto-calculate as 1/4 of radius
@@ -112,19 +112,27 @@ impl TerrainAssetTracker {
 /// Main function - the entry point of our Rust program
 /// This is where the program starts running when you execute it
 fn main() {
-    let sub_k = 15; // Number of subpixels in the vertical direction
-    let radius = 1000.0; // Radius of the terrain in meters
+    let sub_k = 32; // Number of subpixels in the vertical direction
     let image_path = "assets/maps/sphere_texture.png";
 
 
     // Initialize the Planisphere with the specified size and detail level
-    let planisphere = Planisphere::from_elevation_map(image_path, sub_k, radius)
+    let mut planisphere = Planisphere::from_elevation_map(image_path, sub_k)
         .expect("Failed to load elevation map");
+
+    // Set the radius before making planisphere immutable
+    let planisphere_width = planisphere.get_width_pixels();
+    let circumference = planisphere_width * sub_k;
+    let radius = circumference as f64 / (2.0 * std::f64::consts::PI);
+    planisphere.set_radius(radius);
+    eprintln!("Radius set to: {}", radius);
 
     // Compute initial subpixel from desired geographic coordinates
     let initial_lon = 0.0;
     let initial_lat = 0.0;
     let (iplayer, jplayer, kplayer) = planisphere.geo_to_subpixel(initial_lon, initial_lat);
+    let _subpixel_view_distance = 30;
+    let _recreation_threshold  = (0.4 * _subpixel_view_distance as f32) as i32;
 
     // Create and configure the Bevy App (the main game engine instance)
     App::new()
@@ -149,19 +157,23 @@ fn main() {
             latitude: initial_lat,
             subpixel: (iplayer, jplayer, kplayer),
             world_position: Vec3::ZERO, // Initial world position at the center
-            max_subpixel_distance: 10, // Will use TerrainConfig::recreation_threshold at runtime
+            max_subpixel_distance: _subpixel_view_distance,
             last_recreation_time: -10.0,
             terrain_recreated: false,
+            rendered_subpixels: RenderedSubpixels::new(),                //Vec<(usize, usize, usize, [(f64, f64); 4])>,
+            triangle_mapping: TriangleSubpixelMapping::new(),
         })
         .insert_resource(RenderedSubpixels::new())
-        .insert_resource(PerformanceStats::default())
         .insert_resource(TriangleSubpixelMapping::default())
+        
         
         // Systems that run once at startup (world setup)
         .add_systems(Startup, setup_third_person_camera) // Setup camera, physics world, and UI
         .add_systems(Startup, (setup_physics, setup_ui))
         .add_systems(Startup, (setup_object_templates, setup_player).chain())
         // Systems that run every frame (game loop) - split into groups to avoid tuple size limit
+        .add_systems(Update, terrain_recreation_system)     // Handle terrain recreation with asset cleanup and coordinate sync
+        .add_systems(Update, update_coordinate_display)      // Update the UI coordinate display with current player position
         .add_systems(Update, (
             //move_agents,                    // Update agent movement and behavior
             //check_sensors,                  // Handle agent item pickup detection
@@ -181,8 +193,7 @@ fn main() {
             //track_entities_subpixel_position_raycast,
             game_object::raycast_tile_locator_system,
         ))
-        .add_systems(Update, terrain_recreation_system)     // Handle terrain recreation with asset cleanup and coordinate sync
-        .add_systems(Update, update_coordinate_display)      // Update the UI coordinate display with current player position
+        
         .add_systems(Update, (
             update_third_person_camera,     // Update camera to follow player
             third_person_camera_rotation,   // Handle camera rotation with mouse
@@ -220,13 +231,14 @@ fn setup_physics(
     mut rendered_subpixels: ResMut<RenderedSubpixels>,  // Rendered subpixels resource
     mut triangle_mapping: ResMut<TriangleSubpixelMapping>, // Triangle to subpixel mapping
     mut asset_tracker: ResMut<TerrainAssetTracker>,     // Asset tracker for cleanup
+    time: Res<Time>,                                    // Time resource for profiling
 ) {
     // Create a small planisphere for gnomonic projection terrain
 
     // Initialize terrain center resource to match initial terrain
     terrain_center.longitude = 0.0;   // Greenwich meridian
     terrain_center.latitude = 0.0;  // 45° North
-    terrain_center.max_subpixel_distance = terrain_config.recreation_threshold; // Sync with TerrainConfig
+    //terrain_center.max_subpixel_distance = terrain_config.recreation_threshold; // Sync with TerrainConfig
     terrain_center.last_recreation_time = -10.0; // Allow immediate recreation if needed
     
     // setup_object_templates is now handled by Startup systems
@@ -236,12 +248,10 @@ fn setup_physics(
         &mut meshes, 
         &mut materials,
         &asset_server,            // Center latitude
-        terrain_config.terrain_radius,          // Use config terrain radius
         &planisphere,    
-        &terrain_center,                       // Planisphere reference
-        Some(&mut rendered_subpixels),          // Pass rendered subpixels resource
-        Some(&mut triangle_mapping),            // Pass triangle mapping resource
-        Some(&mut asset_tracker)                // Pass asset tracker for cleanup
+        &mut terrain_center,                    // Planisphere reference (mutable)
+        Some(&mut asset_tracker),               // Pass asset tracker for cleanup
+        &time                                   // Pass time resource for profiling
     );
 
     // Create the terrain center beacon at the gnomonic projection center
