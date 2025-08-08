@@ -256,12 +256,12 @@ def main():
     # Parameters
     seed = 42
 
-    ny = int(64)  # Height (latitude)
+    ny = int(432)  # Height (latitude)
     nx = int(2 * ny) # Width (longitude)
     
     # Optional: Path to image for 4th channel (grayscale values)
     # Set to None to use Perlin noise, or provide a path to use an image
-    fourth_channel_image_path = "elevation.jpg"  # Example: "grayscale_mask.png"
+    fourth_channel_image_path = "mask.jpg"  # Example: "grayscale_mask.png"
     
     # You can uncomment and modify the line below to use an image for 4th channel:
     # fourth_channel_image_path = "your_grayscale_image.png"

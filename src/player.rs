@@ -440,6 +440,7 @@ fn check_terrain_need_recreation(
             eprintln!("Player is too far from terrain center! Distance: {:.2} tiles, max allowed: {}", distance_tiles, terrain_center.max_subpixel_distance);
             needs_recreation = true; // Set flag to recreate terrain
             next_terrain_center_tile = player_subpixel_position.subpixel; // Use player's subpixel as new center
+            eprintln!("next center at {} {} {}", next_terrain_center_tile.0, next_terrain_center_tile.1, next_terrain_center_tile.2)
     }
     // Placeholder for actual logic to determine if terrain needs recreation
     // This could be based on player position, time since last recreation, etc.
@@ -473,8 +474,8 @@ pub fn reinitialize_positions(
 
         // Move all other objects by the same offset to maintain relative positions to player
         for (_, mut transform, _) in object_query.iter_mut() {
-            transform.translation.x += player_offset.x;
-            transform.translation.z += player_offset.z;
+            let relative_pos = transform.translation - player_offset;
+            transform.translation = relative_pos;
             // Y position remains unchanged
         }
 
@@ -501,10 +502,8 @@ pub fn terrain_recreation_system(
 ) {
     let current_time = time.elapsed_secs();
     let time_since_last_recreation = current_time - terrain_center.last_recreation_time;
-    let mut needs_recreation = false; // Default to false, will be set if conditions are met
-    let mut next_terrain_center_tile = (0,0,0); // Default tile for terrain center
     // Calculate distance from terrain center
-    (needs_recreation, next_terrain_center_tile) = check_terrain_need_recreation(
+    let (needs_recreation, next_terrain_center_tile) = check_terrain_need_recreation(
         &mut player_query,
         &planisphere,
         &terrain_center
@@ -518,9 +517,7 @@ pub fn terrain_recreation_system(
     if needs_recreation {
 
         println!("Player distance from terrain center exceeds threshold. Recreating terrain... (last recreation: {:.1}s ago)", time_since_last_recreation);
-        
-
-        reinitialize_positions(player_query, object_query);
+ 
 
 
         terrain_center.set_ijk(
@@ -529,6 +526,9 @@ pub fn terrain_recreation_system(
             next_terrain_center_tile.2, 
             &planisphere
         );
+        
+        reinitialize_positions(player_query, object_query);
+
 
 
         // Clear old triangle mapping
@@ -557,7 +557,8 @@ pub fn terrain_recreation_system(
         );
 
 
-        println!("Terrain recreation completed successfully");
+       
+        println!("Terrain recreation completed successfully at {} {} {} ", terrain_center.subpixel.0, terrain_center.subpixel.1, terrain_center.subpixel.2);
         // Note: cannot print triangle mapping details or rendered subpixels because they were moved into the terrain creation function
         // entity_replacement_system(commands, meshes, materials, rendered_subpixels, object_query, terrain_center, planisphere, object_templates);
     }

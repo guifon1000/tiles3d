@@ -1,9 +1,13 @@
 use bevy::ecs::{spawn, world};
 // Import statements - bring in code from other modules and crates
-use bevy::prelude::*;           // Bevy game engine core functionality
+use bevy::prelude::*;           use bevy::scene::ron::to_string;
+// Bevy game engine core functionality
 use bevy_rapier3d::prelude::*;  // Physics engine for 3D collision detection
 use bevy::pbr::wireframe::Wireframe; // Wireframe rendering for debugging/visualization
+use bevy::tasks::{AsyncComputeTaskPool, Task};
+use futures_lite::future;
 
+use crate::planisphere::Planisphere;
 // Import the planisphere module for gnomonic projection
 use crate::{planisphere, terrain};
 use crate::game_object::EntitySubpixelPosition;
@@ -271,7 +275,7 @@ pub fn determine_landscape_element_from_rgba(_red: f64, _green: f64, _blue: f64,
 pub fn select_texture_from_rgba(red: f64, _green: f64, _blue: f64, _alpha: f64) -> usize {
     // Current implementation: Simple red-channel-based texture selection
     // Maps red values to texture indices using threshold ranges
-    let alpha = _alpha;
+    let alpha = 1.0 - _alpha;
     let texture_index = if alpha < 0.1 {
         0  // Very dark alpha -> texture 0 (e.g., deep water)
     } else if alpha < 0.2 {
@@ -335,8 +339,95 @@ pub fn create_terrain_simple(
     ));
 }
 
-
 pub fn terrain_mesh(
+    planisphere: &planisphere::Planisphere,
+    subpixels: Vec<(usize, usize, usize, [(f64, f64); 4])>,
+    lonlat_gnomocenter: (f64, f64),
+)-> (Vec<[f32; 3]>, Vec<u32>, Vec<[f32; 2]>, Vec<(usize, usize, usize)>){                           //-> (Vec<[f32; 3]>, Vec<u32>, Vec<[f32; 2]>, Vec<(usize, usize, usize)>)
+    let mut vertices = Vec::<[f32; 3]>::new();
+    let mut indices = Vec::<u32>::new();
+    let mut uvs = Vec::<[f32; 2]>::new();
+    let mut vertex_index = 0u32;
+    let mut triangle_mapping = Vec::<(usize, usize, usize)>::new();
+    for (_i, _j, _k, _corners) in subpixels.iter() {
+        let (i, j, k) = (*_i, *_j, *_k);
+        let corners = *_corners;
+        let current_pixel_norm_lat = j as f64 / planisphere.height_pixels as f64;
+        let current_latitude = current_pixel_norm_lat * 180.0 - 90.0;
+        let current_lon_subdivisions = (planisphere.subpixel_divisions as f64 * current_latitude.to_radians().cos()).max(1.0) as usize;
+                // Create vertices for this subpixel
+        for (lon, lat) in corners.iter() {
+            let (x, y) = planisphere.geo_to_gnomonic(*lon, *lat, lonlat_gnomocenter.0, lonlat_gnomocenter.1);
+            vertices.push([x as f32, 0.0, y as f32]);
+        }
+        let atlas_size = 16; // 16x16 grid
+
+        // Texture selection mode - set to true for RGBA-based, false for border-based
+        let use_rgba_texture_selection = true;
+        
+        let tile_index = if use_rgba_texture_selection {
+            // RGBA-based texture selection
+            let (red, green, blue, alpha) = planisphere.get_rgba_at_subpixel(i, j, k);
+            select_texture_from_rgba(red, green, blue, alpha)
+        } else {
+            // Original border-based texture selection
+            let mut tile_index = 5; // default texture
+            
+            //north border
+            if k%planisphere.subpixel_divisions == 0 {
+                tile_index = 15; //north
+            }
+
+            //south border
+            if k%planisphere.subpixel_divisions == planisphere.subpixel_divisions-1 {
+                tile_index = 12;
+            }
+            
+            //west border
+            if k/planisphere.subpixel_divisions==0  {
+                tile_index = 13;
+            }        
+
+            //east border
+            if k/planisphere.subpixel_divisions==current_lon_subdivisions-1 {
+                tile_index = 7;
+            }
+            
+            tile_index
+        };
+
+
+        let tile_u = (tile_index % atlas_size) as f32 / atlas_size as f32;
+        let tile_v = (tile_index / atlas_size) as f32 / atlas_size as f32;
+        let tile_size = 1.0 / atlas_size as f32;
+        
+
+        // UVs for this quad
+        uvs.push([tile_u, tile_v]); // bottom-left
+        uvs.push([tile_u + tile_size, tile_v]); // bottom-right
+        uvs.push([tile_u + tile_size, tile_v + tile_size]); // top-right
+        uvs.push([tile_u, tile_v + tile_size]); // top-left
+        
+        // Create triangles (two triangles per quad)
+        indices.extend_from_slice(&[
+            vertex_index, vertex_index + 1, vertex_index + 2,
+            vertex_index, vertex_index + 2, vertex_index + 3
+        ]);
+        
+        // Map both triangles to this subpixel (i, j, k)
+        triangle_mapping.push((i, j, k)); // Triangle 1
+        triangle_mapping.push((i, j, k)); // Triangle 2
+        
+        vertex_index += 4;
+        }
+        (vertices, indices, uvs, triangle_mapping)
+}
+
+
+
+
+
+pub fn terrain_mesh00(
     planisphere: &planisphere::Planisphere,
     terrain_center: &mut TerrainCenter,
 ) ->    (Vec<[f32; 3]>, Vec<u32>, Vec<[f32; 2]>) { // (vertices, indices, uvs)    
@@ -454,7 +545,37 @@ fn terrain_collider(
     (trimesh_collider, triangles)
 }
 
-
+// Refactor your compute_mesh to return both the mesh and the updates
+pub fn compute_mesh_async(
+    planisphere: &planisphere::Planisphere,
+    subpixel: (usize, usize, usize),
+    max_subpixel_distance: usize,
+) -> (Mesh, RenderedSubpixels, TriangleSubpixelMapping) {
+    let subpixels = planisphere.get_subpixels_by_distance_method(
+        subpixel.0, 
+        subpixel.1, 
+        subpixel.2, 
+        max_subpixel_distance, 
+        crate::planisphere::DistanceMethod::Chebyshev
+    );
+    let mut rendered_subpixels = RenderedSubpixels::new();
+    rendered_subpixels.subpixels = subpixels.clone();
+    let lonlat = planisphere.subpixel_to_geo(subpixel.0, subpixel.1, subpixel.2);
+    let (vertices, indices, uvs, mapping) = terrain_mesh(planisphere, subpixels, lonlat);
+    let mut triangle_map =  TriangleSubpixelMapping { triangle_to_subpixel: mapping };
+    let (trimesh_collider, triangles) = terrain_collider(&vertices, &indices);
+    
+    let mut terrain_mesh = Mesh::new(
+        bevy::render::mesh::PrimitiveTopology::TriangleList,
+        bevy::render::render_asset::RenderAssetUsages::default()
+    );
+    terrain_mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vertices);
+    terrain_mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    terrain_mesh.insert_indices(bevy::render::mesh::Indices::U32(indices));
+    terrain_mesh.compute_smooth_normals();
+    
+    (terrain_mesh, rendered_subpixels , triangle_map)
+}
 
 
 
@@ -501,6 +622,7 @@ pub fn create_terrain_gnomonic_with_distance_method(
         distance_method);
 
     println!("Generated {} subpixels within distance {} using method {:?}", subpixels.len(), terrain_center.max_subpixel_distance, distance_method);
+    println!("center at {} {} {}", terrain_center.subpixel.0, terrain_center.subpixel.1, terrain_center.subpixel.2);
     let t1 = std::time::Instant::now();
     println!("Subpixel generation took {:.3} ms", (t1 - t0).as_secs_f64() * 1000.0);
 
@@ -515,12 +637,10 @@ pub fn create_terrain_gnomonic_with_distance_method(
     
     let t0 = std::time::Instant::now();
     // Update the rendered subpixels in terrain_center
-    
-    let (vertices, indices, uvs) = terrain_mesh(planisphere, terrain_center);
-    let t1 = std::time::Instant::now();
-    println!("Vertex processing took {:.3} ms for {} subpixels", (t1 - t0).as_secs_f64() * 1000.0, subpixels.len());
+    let lonlat = (terrain_center.longitude, terrain_center.latitude);
+    let (vertices, indices, uvs, mapping) = terrain_mesh(planisphere, subpixels, lonlat);
 
-   
+   terrain_center.triangle_mapping.triangle_to_subpixel = mapping;
     
     let (trimesh_collider, triangles) = terrain_collider(&vertices, &indices);
     
@@ -696,8 +816,16 @@ pub fn manage_object_visibility(
     }
 }
 
+
+
+
+#[derive(Component)]
+struct MeshComputeTask(Task<Mesh>);
+
+
+
 /// Resource to track terrain center changes for object repositioning
-#[derive(Resource, Default, Clone)]
+#[derive(Resource, Default)]
 pub struct TerrainCenter {
     pub longitude: f64,
     pub latitude: f64,
@@ -708,6 +836,8 @@ pub struct TerrainCenter {
     pub terrain_recreated: bool,
     pub rendered_subpixels: RenderedSubpixels,
     pub triangle_mapping: TriangleSubpixelMapping,
+    // Store the actual tasks instead of the task pool
+    pub mesh_tasks: Vec<(String, Task<(Mesh, RenderedSubpixels, TriangleSubpixelMapping)>)>,
 }
 
 impl TerrainCenter {
@@ -722,6 +852,7 @@ impl TerrainCenter {
             terrain_recreated: false,
             rendered_subpixels: RenderedSubpixels::new(),
             triangle_mapping: TriangleSubpixelMapping::new(),
+            mesh_tasks: Vec::new(),
         }
     }
 
@@ -738,6 +869,50 @@ impl TerrainCenter {
     pub fn reset_flag(&mut self) {
         self.terrain_recreated = false;
     }
+
+
+
+    pub fn poll_completed_tasks(&mut self) -> Vec<(String, (Mesh, RenderedSubpixels, TriangleSubpixelMapping))> {
+        use futures_lite::future;
+        let mut completed = Vec::new();
+        
+        // Retain only incomplete tasks, collect completed ones
+        self.mesh_tasks.retain_mut(|(task_id, task)| {
+            if let Some(mesh) = future::block_on(future::poll_once(task)) {
+                completed.push((task_id.clone(), mesh));
+                false // Remove completed task
+            } else {
+                true // Keep running task
+            }
+        });
+        
+        completed
+    }
+    
+    pub fn cancel_task(&mut self, task_id: &str) {
+        self.mesh_tasks.retain(|(id, _)| id != task_id);
+    }
+
+pub fn spawn_terrain_task(&mut self, planisphere: &planisphere::Planisphere) {
+    let task_pool = AsyncComputeTaskPool::get();
+    
+    // Copy primitive values
+    let subpixel = self.subpixel;
+    let max_subpixel_distance = self.max_subpixel_distance;
+    
+    // Clone the entire planisphere (if it implements Clone)
+    let planisphere_owned = planisphere.clone();
+    
+    let task = task_pool.spawn(async move {
+        // Now we own planisphere_owned, not borrowing
+        compute_mesh_async(&planisphere_owned, subpixel, max_subpixel_distance)
+    });
+    
+    let id_string = "zob";
+    self.mesh_tasks.push((id_string.to_string(), task));
+}
+
+
 }
 
 /// Helper function to find the nearest free subpixel position using spiral search

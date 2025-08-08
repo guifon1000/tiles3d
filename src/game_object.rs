@@ -374,6 +374,8 @@ pub fn raycast_tile_locator_system(
                     }
                 };
                 // Apply same offset detection as green marker
+                if terrain_center.triangle_mapping.triangle_to_subpixel.len() > 0
+                {                
                 let adjusted_triangle_index = if triangle_index >= terrain_center.triangle_mapping.triangle_to_subpixel.len() as u32 {
                     let mapping_size = terrain_center.triangle_mapping.triangle_to_subpixel.len() as u32;
                     let potential_offset = (triangle_index / mapping_size) * mapping_size;
@@ -391,6 +393,7 @@ pub fn raycast_tile_locator_system(
                 subpixel_position.subpixel.0 = _subpixel_position.0;
                 subpixel_position.subpixel.1 = _subpixel_position.1;
                 subpixel_position.subpixel.2 = _subpixel_position.2;
+                }
                 //eprintln!("Raycast hit tile: {} {} {}", _subpixel_position.0, _subpixel_position.1, _subpixel_position.2);
 
                 // You can update locator.last_tile here if you want

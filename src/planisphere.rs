@@ -1,5 +1,8 @@
+use bevy::math::ops::sqrt;
 use ndarray::Array2;
 use image::{DynamicImage, GenericImageView};
+
+use crate::terrain::ijk_to_world;
 
 pub type Result<T> = std::result::Result<T, image::ImageError>;
 
@@ -16,6 +19,7 @@ pub enum DistanceMethod {
 
 /// Represents a geographic map with elevation data and coordinate conversion capabilities.
 /// Handles transformation between geographic coordinates (latitude, longitude) and grid positions.
+#[derive(Clone)]
 pub struct Planisphere {
     /// Width of the map grid in pixels
     pub width_pixels: usize,
@@ -587,6 +591,10 @@ impl Planisphere {
                 eprint!("Warning: i index out of bounds: {} >= {}\n", i, self.width_pixels);
                 i= i%self.width_pixels; // Avoid out-of-bounds access
             }
+            if i < 0 {
+                eprint!(" NEGATIVE I {} -> {}", i , self.width_pixels + i);
+                i = self.width_pixels + i;
+            }
             for j in min_j..=max_j {
                 // Get the correct number of subpixels based on latitude
                 let pixel_norm_lat = j as f64 / self.height_pixels as f64;
@@ -914,14 +922,59 @@ pub fn get_subpixels_by_rectangular_distance(&self, center_i: usize, center_j: u
         let pixel_radius_y = (max_subpixel_distance / self.subpixel_divisions) + 1;
         let pixel_radius_x = (max_subpixel_distance / self.get_lon_subdivisons(latitude)) + 1;
         
+        
+
         // Get the grid of pixels centered on the player's pixel
-        let min_i = if center_i > pixel_radius_x { center_i - pixel_radius_x } else { 0 };
-        let max_i = center_i + pixel_radius_x;
+        let min_i = if center_i > pixel_radius_x { center_i - pixel_radius_x } else { 0  };
+        let max_i = (center_i + pixel_radius_x);//%self.width_pixels;// crash
         let min_j = if center_j > pixel_radius_y { center_j - pixel_radius_y } else { 0 };
         let max_j = std::cmp::min(center_j + pixel_radius_y, self.height_pixels - 1);
-        
-        // Get all subpixels in the pixel grid
-        let subpixels = self.get_subpixels_in_rectangle(min_i, max_i, min_j, max_j);
+        let mut subpixels = self.get_subpixels_in_rectangle(min_i, max_i, min_j, max_j);
+            eprintln!("min_i {} max_i {} min j {} max j {}", min_i, max_i, min_j, max_j);
+
+            let _min_i = center_i as i32 - pixel_radius_x as i32;
+            let _max_i = center_i as i32 + pixel_radius_x as i32;
+            let _min_j = center_j as i32 - pixel_radius_y as i32;
+            let _max_j = center_j as i32 + pixel_radius_y as i32;
+        if (_min_j < 0) {
+            // (_max_j > self.height_pixels)){
+        subpixels = self.get_subpixels_in_rectangle(0, self.get_width_pixels(), 0, max_j);
+        }
+        if (_max_j >= self.get_height_pixels() as i32) {
+            // (_max_j > self.height_pixels)){
+        subpixels = self.get_subpixels_in_rectangle(0, self.get_width_pixels(), min_j, self.get_height_pixels());
+        }
+            if (_min_i < 0) && (_max_i < self.get_width_pixels() as i32) {
+                eprintln!("_min_i {} _max_i {} BECOMES {} {}", _min_i, _max_i, self.get_width_pixels() as i32 + _min_i  , _max_i);
+                let mini = self.get_width_pixels() as i32 + _min_i;
+                let maxi = self.get_width_pixels();
+                subpixels.append(&mut self.get_subpixels_in_rectangle(mini as usize, maxi, min_j, max_j));
+            }
+            if (_min_i >= 0) && (_max_i >= self.get_width_pixels() as i32) {
+                eprintln!("_min_i {} _max_i {} BECOMES {} {}", _min_i, _max_i, self.get_width_pixels() as i32 + _min_i  , _max_i);
+                let mini =0 as usize; 
+                let maxi = (_max_i as usize)%self.get_width_pixels();
+                subpixels.append(&mut self.get_subpixels_in_rectangle(mini as usize, maxi, min_j, max_j));
+            }
+/*             if (_min_j < 0) && (_max_i < self.get_height_pixels() as i32) {
+                let minj = self.get_height_pixels() as i32 + _min_j;
+                let maxj = self.get_height_pixels();
+                let mini = if _min_i > self.width_pixels as i32/2 { _min_i - (self.width_pixels/2) as i32 } else { _min_i + (self.width_pixels/2) as i32};
+                let maxi = if _max_i > self.width_pixels as i32/2 { _max_i - (self.width_pixels/2) as i32 } else { _max_i + (self.width_pixels/2) as i32};
+                subpixels.append(&mut self.get_subpixels_in_rectangle(mini as usize, maxi as usize, minj as usize, maxj as usize));
+            }
+
+
+            if (_min_j >= 0) && (_max_j >= self.height_pixels as i32 ) {
+                let deltaj = _max_j  - self.height_pixels as i32 + 1;
+                let minj = self.height_pixels - 1 - deltaj as usize;
+                let maxj = self.height_pixels - 1;
+                let mini = if _min_i > self.width_pixels as i32 { _min_i - (self.width_pixels/2) as i32 } else { _min_i + (self.width_pixels/2) as i32};
+                let maxi = if _max_i > self.width_pixels as i32 { _max_i - (self.width_pixels/2) as i32 } else { _max_i + (self.width_pixels/2) as i32};
+                eprintln!("lat {} {} -> {} {}", _min_j, _max_j, minj, maxj );
+                subpixels.append(&mut self.get_subpixels_in_rectangle(mini as usize, maxi as usize, minj as usize, maxj as usize));
+            } */
+            eprintln!("From {} to {}" , _min_i, _max_i);
         // Add the center subpixel first
         result.push((center_i, center_j, center_k, self.get_subpixel_corners(center_i, center_j, center_k)));
         
@@ -935,28 +988,43 @@ pub fn get_subpixels_by_rectangular_distance(&self, center_i: usize, center_j: u
         let center_sub_j = center_k % self.subpixel_divisions;
         let center_continuous_i = (center_i * self.subpixel_divisions + center_sub_i) as f64;
         let center_continuous_j = (center_j * self.subpixel_divisions + center_sub_j) as f64;
-        
+
+
+
+
+
+
+
+        let center_geo = self.subpixel_to_geo(center_i, center_j, center_k);
         // Use Chebyshev distance (max of dx, dy) for rectangular pattern
         for (i, j, k, corners) in subpixels {
+            
+            let subpixel_geo = self.subpixel_to_geo(i, j, k);
+            let subpixel_world = self.geo_to_gnomonic(subpixel_geo.0, subpixel_geo.1, center_geo.0, center_geo.1);
             // Skip the center (already added)
             if i == center_i && j == center_j && k == center_k {
                 continue;
             }
-            
+            let d2 = subpixel_world.0*subpixel_world.0 + subpixel_world.1*subpixel_world.1;
+            let d = sqrt(d2 as f32);
+            if d<= max_subpixel_distance as f32 {
+                result.push((i, j, k, corners));
+            }
             // Convert current coordinates to continuous subpixel coordinates
             let sub_i = k / self.subpixel_divisions;
             let sub_j = k % self.subpixel_divisions;
             let continuous_i = (i * self.subpixel_divisions + sub_i) as f64;
             let continuous_j = (j * self.subpixel_divisions + sub_j) as f64;
+            //let distance_to_center = sqrt()
             
             // Calculate Chebyshev distance (rectangular pattern)
-            let dx = (continuous_i - center_continuous_i).abs();
-            let dy = (continuous_j - center_continuous_j).abs();
-            let chebyshev_distance = dx.max(dy);
+            let dx = (continuous_i - center_continuous_i).abs() as f32;
+            let dy = (continuous_j - center_continuous_j).abs() as f32;
+            let chebyshev_distance = sqrt(dx*dx+dy*dy);
             
             // Include if within the maximum subpixel distance
-            //if chebyshev_distance <= max_subpixel_distance as f64 {
-                result.push((i, j, k, corners));
+            //if chebyshev_distance  <= max_subpixel_distance as f32 {
+            //    result.push((i, j, k, corners));
             //}
         }
         
@@ -1300,6 +1368,12 @@ pub fn geo_to_gnomonic_helper(lon: f64, lat: f64, center_lon: f64, center_lat: f
     
     (x, y)
 }
+
+
+
+
+
+
 
 /// Improved inverse gnomonic projection - converts world coordinates back to geographic coordinates
 /// This version has better numerical stability and error handling

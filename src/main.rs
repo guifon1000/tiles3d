@@ -1,7 +1,9 @@
 // Import statements - bring in code from external crates and our own modules
 use bevy::{prelude::*, render::Render};           // Bevy game engine - the * imports everything commonly used
 use bevy_rapier3d::prelude::*;  // Rapier physics engine - handles collision detection and physics
-
+use serde::Deserialize;
+use std::fs::File;
+use std::io::Read;
 // Module declarations - tell Rust about our other source files
 mod terrain;     // terrain.rs - handles pure terrain mesh generation
 mod landscape;   // landscape.rs - handles trees, rocks, items, and decorative elements
@@ -112,7 +114,7 @@ impl TerrainAssetTracker {
 /// Main function - the entry point of our Rust program
 /// This is where the program starts running when you execute it
 fn main() {
-    let sub_k = 32; // Number of subpixels in the vertical direction
+    let sub_k = 1; // Number of subpixels in the vertical direction
     let image_path = "assets/maps/sphere_texture.png";
 
 
@@ -128,10 +130,10 @@ fn main() {
     eprintln!("Radius set to: {}", radius);
 
     // Compute initial subpixel from desired geographic coordinates
-    let initial_lon = 0.0;
-    let initial_lat = 0.0;
+    let initial_lon = 7.0;
+    let initial_lat = -59.999;
     let (iplayer, jplayer, kplayer) = planisphere.geo_to_subpixel(initial_lon, initial_lat);
-    let _subpixel_view_distance = 30;
+    let _subpixel_view_distance = 75;
     let _recreation_threshold  = (0.4 * _subpixel_view_distance as f32) as i32;
 
     // Create and configure the Bevy App (the main game engine instance)
@@ -162,6 +164,7 @@ fn main() {
             terrain_recreated: false,
             rendered_subpixels: RenderedSubpixels::new(),                //Vec<(usize, usize, usize, [(f64, f64); 4])>,
             triangle_mapping: TriangleSubpixelMapping::new(),
+            mesh_tasks: Vec::new(),
         })
         .insert_resource(RenderedSubpixels::new())
         .insert_resource(TriangleSubpixelMapping::default())
@@ -236,8 +239,8 @@ fn setup_physics(
     // Create a small planisphere for gnomonic projection terrain
 
     // Initialize terrain center resource to match initial terrain
-    terrain_center.longitude = 0.0;   // Greenwich meridian
-    terrain_center.latitude = 0.0;  // 45° North
+    //terrain_center.longitude = 0.0;   // Greenwich meridian
+    //terrain_center.latitude = 0.0;  // 45° North
     //terrain_center.max_subpixel_distance = terrain_config.recreation_threshold; // Sync with TerrainConfig
     terrain_center.last_recreation_time = -10.0; // Allow immediate recreation if needed
     
