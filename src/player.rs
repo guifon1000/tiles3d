@@ -452,14 +452,15 @@ fn check_terrain_need_recreation(
 pub fn reinitialize_positions(
     mut player_query: Query<(Entity, &mut Transform, &EntitySubpixelPosition , &Player)>,
     mut object_query: Query<(Entity, &mut Transform,  &ObjectDefinition), (Without<Player>, Without<MouseTrackerObject>)>,
+    offset: Vec3,
 ) {
         // Store player positions and calculate the offset needed to move them to origin
         let player_offset = if let Some((_, player_transform, _, _)) = player_query.iter().next() {
             // The offset needed to move the player to origin
             Vec3::new(
-                -player_transform.translation.x,
+                -player_transform.translation.x + offset.x,
                 0.0,  // We don't change Y position (height)
-                -player_transform.translation.z
+                -player_transform.translation.z + offset.z
             )
         } else {
             Vec3::ZERO
@@ -503,7 +504,7 @@ pub fn terrain_recreation_system(
     let current_time = time.elapsed_secs();
     let time_since_last_recreation = current_time - terrain_center.last_recreation_time;
     // Calculate distance from terrain center
-    let (needs_recreation, next_terrain_center_tile) = check_terrain_need_recreation(
+    let (mut needs_recreation, next_terrain_center_tile) = check_terrain_need_recreation(
         &mut player_query,
         &planisphere,
         &terrain_center
@@ -512,22 +513,24 @@ pub fn terrain_recreation_system(
 
     //despawn_unified_object_from_name(&mut commands, "TerrainCenter", object_query);
     //spawn_terraincenter_at_world_position(&mut commands, &mut meshes, &mut materials, Some(&planisphere), &terrain_center, Vec3::new(0.0, 0.0, 0.0));
+    let mut player_position_save1 = Vec3::new(0.0,0.0,0.0);
+    let mut player_position_save2 = Vec3::new(0.0,0.0,0.0);
 
-
-    if needs_recreation {
+    if (needs_recreation) && ( terrain_center.recreation_spawned == false){
 
         println!("Player distance from terrain center exceeds threshold. Recreating terrain... (last recreation: {:.1}s ago)", time_since_last_recreation);
- 
+        terrain_center.spawn_terrain_task(&planisphere, next_terrain_center_tile);
+        needs_recreation = false;
+        for (player_entity, transform, objdef) in object_query.iter() {
+           let  s = transform.clone();
+            player_position_save1 = s.translation;
+        }
+        terrain_center.recreation_spawned = true;
+    }
 
 
-        terrain_center.set_ijk(
-            next_terrain_center_tile.0, 
-            next_terrain_center_tile.1, 
-            next_terrain_center_tile.2, 
-            &planisphere
-        );
-        
-        reinitialize_positions(player_query, object_query);
+
+/*         reinitialize_positions(player_query, object_query);
 
 
 
@@ -542,9 +545,9 @@ pub fn terrain_recreation_system(
         }
         for landscape_entity in landscape_query.iter() {
             commands.entity(landscape_entity).despawn();
-        }
+        } */
         
-        // Create new terrain
+/*         // Create new terrain
         crate::terrain::create_terrain_gnomonic_rectangular(
             &mut commands,
             &mut meshes,
@@ -554,14 +557,41 @@ pub fn terrain_recreation_system(
             &mut terrain_center,
             Some(&mut asset_tracker),
             &time
-        );
+        ); */
 
+        let completed: Vec<(String, (Mesh, RenderedSubpixels, crate::terrain::TriangleSubpixelMapping, Collider))> = terrain_center.poll_completed_tasks();
+        let mut new_mesh = false;
+        for (task_id, mesh) in completed {
+            println!("Task {} completed!", task_id);
+            let msh = mesh.0;
+            let subp = mesh.1;
+            let map = mesh.2;
+            let collider = mesh.3;
+            terrain_center.triangle_mapping = map;
+        terrain_center.mesh_tasks = Vec::new();
+        // CRITICAL: Clean up old asset handles from Bevy's asset system to prevent memory leaks
+        asset_tracker.cleanup_assets(&mut meshes, &mut materials);
+                // Remove existing terrain and landscape entities
+        for terrain_entity in terrain_query.iter() {
+            commands.entity(terrain_entity).despawn(); // Use despawn() instead of despawn_recursive()
+        }
+        crate::terrain::create_terrain(&mut commands, &mut meshes, &mut materials, &asset_server, Some(&mut asset_tracker),
+                                                msh, collider);
+        new_mesh=true;
 
-       
+        }    
+        if new_mesh {
+        for (player_entity, transform, objdef) in object_query.iter() {
+            player_position_save2 = transform.translation;
+        }
+        let offset = player_position_save2 - player_position_save1;
+            reinitialize_positions(player_query, object_query, 100.0*offset);   
+        terrain_center.recreation_spawned = false;
         println!("Terrain recreation completed successfully at {} {} {} ", terrain_center.subpixel.0, terrain_center.subpixel.1, terrain_center.subpixel.2);
+    }
         // Note: cannot print triangle mapping details or rendered subpixels because they were moved into the terrain creation function
         // entity_replacement_system(commands, meshes, materials, rendered_subpixels, object_query, terrain_center, planisphere, object_templates);
-    }
+    
 }
 
 

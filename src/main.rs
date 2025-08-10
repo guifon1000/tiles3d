@@ -125,7 +125,7 @@ fn main() {
     // Set the radius before making planisphere immutable
     let planisphere_width = planisphere.get_width_pixels();
     let circumference = planisphere_width * sub_k;
-    let radius = circumference as f64 / (2.0 * std::f64::consts::PI);
+    let radius = circumference as f64 / (2. * std::f64::consts::PI);
     planisphere.set_radius(radius);
     eprintln!("Radius set to: {}", radius);
 
@@ -165,6 +165,7 @@ fn main() {
             rendered_subpixels: RenderedSubpixels::new(),                //Vec<(usize, usize, usize, [(f64, f64); 4])>,
             triangle_mapping: TriangleSubpixelMapping::new(),
             mesh_tasks: Vec::new(),
+            recreation_spawned: false,
         })
         .insert_resource(RenderedSubpixels::new())
         .insert_resource(TriangleSubpixelMapping::default())

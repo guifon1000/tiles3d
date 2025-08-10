@@ -550,7 +550,7 @@ pub fn compute_mesh_async(
     planisphere: &planisphere::Planisphere,
     subpixel: (usize, usize, usize),
     max_subpixel_distance: usize,
-) -> (Mesh, RenderedSubpixels, TriangleSubpixelMapping) {
+) -> (Mesh, RenderedSubpixels, TriangleSubpixelMapping, Collider) {
     let subpixels = planisphere.get_subpixels_by_distance_method(
         subpixel.0, 
         subpixel.1, 
@@ -574,7 +574,7 @@ pub fn compute_mesh_async(
     terrain_mesh.insert_indices(bevy::render::mesh::Indices::U32(indices));
     terrain_mesh.compute_smooth_normals();
     
-    (terrain_mesh, rendered_subpixels , triangle_map)
+    (terrain_mesh, rendered_subpixels , triangle_map, trimesh_collider)
 }
 
 
@@ -598,7 +598,76 @@ pub fn create_terrain_gnomonic_rectangular(
         time,
     )
 }
+pub fn create_terrain(
+    commands: &mut Commands,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<StandardMaterial>>,
+    asset_server: &Res<AssetServer>,
+    mut asset_tracker: Option<&mut ResMut<crate::TerrainAssetTracker>>, // Optional asset tracker for cleanup
+    terrain_mesh: Mesh,
+    trimesh_collider: Collider,
+){
+    let terrain_mesh_handle = meshes.add(terrain_mesh);
+    let tile_texture: Handle<Image> = asset_server.load("textures/texture_atlas.png");
+    // Store atlas texture handle in asset tracker (reusable across terrain recreations)
+    if let Some(asset_tracker) = asset_tracker.as_deref_mut() {
+        if asset_tracker.texture_atlas.is_none() {
+            asset_tracker.texture_atlas = Some(tile_texture.clone());
+            println!("Stored texture atlas handle in asset tracker");
+        }
+    }
+        // === MATERIAL SETUP FOR TERRAIN TEXTURES ===
+    // Configure the standard material for terrain rendering
+    let terrain_material_handle = materials.add(StandardMaterial {
+        // Enable texture atlas for terrain textures
+        base_color_texture: Some(tile_texture),
+        
+        // BRIGHTNESS: Normal base color for realistic terrain appearance
+        // Values > 1.0 make textures brighter, 1.0 is natural brightness
+        base_color: Color::srgb(1.5, 1.5, 1.5), // White base color to show textures properly
+        
+        // METALLIC SHINE: Keep terrain non-metallic for natural appearance
+        // 0.0 = completely non-metallic (like dirt/grass), 1.0 = pure metal
+        metallic: 0.1, // Minimal metallic shine for natural terrain
+        
+        // SURFACE ROUGHNESS: Natural terrain surface properties
+        // 0.0 = mirror-like, 1.0 = completely rough/matte
+        perceptual_roughness: 0.87, // Rough surface for natural terrain look
+        
+        // CULLING: Disable back-face culling to render both sides of terrain faces
+        // Useful for debugging and ensuring terrain is visible from all angles
+        cull_mode: None,
+        
+        // TRANSPARENCY: Enable alpha blending for transparent texture areas
+        // Allows texture atlas tiles to have transparent borders
+        alpha_mode: AlphaMode::Blend,
+        
+        // EMISSIVE GLOW: Disabled for natural terrain appearance
+        emissive: LinearRgba::BLACK, // No emissive glow for realistic terrain
+        
+        // Use default values for other material properties
+        ..default()
+    });
+        // Track terrain assets for cleanup
+    if let Some(asset_tracker) = asset_tracker.as_deref_mut() {
+        asset_tracker.terrain_meshes.push(terrain_mesh_handle.clone());
+        asset_tracker.terrain_materials.push(terrain_material_handle.clone());
+        println!("Tracked terrain mesh and material handles ({} meshes, {} materials total)", 
+                 asset_tracker.terrain_meshes.len(), asset_tracker.terrain_materials.len());
+    }
 
+    // Spawn single terrain entity
+    let terrain_entity = commands.spawn((
+        Mesh3d(terrain_mesh_handle),
+        MeshMaterial3d(terrain_material_handle),
+        Transform::from_translation(Vec3::new(0.0, 0.0, 0.0)),
+        RigidBody::Fixed,
+        trimesh_collider,
+        Tile,
+        // Wireframe, // Disabled wireframe for normal terrain rendering
+    )).id();
+
+}
 
 pub fn create_terrain_gnomonic_with_distance_method(
     commands: &mut Commands,
@@ -684,7 +753,7 @@ pub fn create_terrain_gnomonic_with_distance_method(
         
         // BRIGHTNESS: Normal base color for realistic terrain appearance
         // Values > 1.0 make textures brighter, 1.0 is natural brightness
-        base_color: Color::srgb(1.0, 1.0, 1.0), // White base color to show textures properly
+        base_color: Color::srgb(1.5, 1.5, 1.5), // White base color to show textures properly
         
         // METALLIC SHINE: Keep terrain non-metallic for natural appearance
         // 0.0 = completely non-metallic (like dirt/grass), 1.0 = pure metal
@@ -692,7 +761,7 @@ pub fn create_terrain_gnomonic_with_distance_method(
         
         // SURFACE ROUGHNESS: Natural terrain surface properties
         // 0.0 = mirror-like, 1.0 = completely rough/matte
-        perceptual_roughness: 0.8, // Rough surface for natural terrain look
+        perceptual_roughness: 0.87, // Rough surface for natural terrain look
         
         // CULLING: Disable back-face culling to render both sides of terrain faces
         // Useful for debugging and ensuring terrain is visible from all angles
@@ -837,7 +906,8 @@ pub struct TerrainCenter {
     pub rendered_subpixels: RenderedSubpixels,
     pub triangle_mapping: TriangleSubpixelMapping,
     // Store the actual tasks instead of the task pool
-    pub mesh_tasks: Vec<(String, Task<(Mesh, RenderedSubpixels, TriangleSubpixelMapping)>)>,
+    pub recreation_spawned: bool,
+    pub mesh_tasks: Vec<(String, Task<(Mesh, RenderedSubpixels, TriangleSubpixelMapping, Collider)>)>,
 }
 
 impl TerrainCenter {
@@ -853,6 +923,7 @@ impl TerrainCenter {
             rendered_subpixels: RenderedSubpixels::new(),
             triangle_mapping: TriangleSubpixelMapping::new(),
             mesh_tasks: Vec::new(),
+            recreation_spawned: false,
         }
     }
 
@@ -872,7 +943,7 @@ impl TerrainCenter {
 
 
 
-    pub fn poll_completed_tasks(&mut self) -> Vec<(String, (Mesh, RenderedSubpixels, TriangleSubpixelMapping))> {
+    pub fn poll_completed_tasks(&mut self) -> Vec<(String, (Mesh, RenderedSubpixels, TriangleSubpixelMapping, Collider))> {
         use futures_lite::future;
         let mut completed = Vec::new();
         
@@ -893,11 +964,12 @@ impl TerrainCenter {
         self.mesh_tasks.retain(|(id, _)| id != task_id);
     }
 
-pub fn spawn_terrain_task(&mut self, planisphere: &planisphere::Planisphere) {
+pub fn spawn_terrain_task(&mut self, planisphere: &planisphere::Planisphere, subpixel: (usize,usize,usize)) {
+    let (i,j,k) = (subpixel.0, subpixel.1, subpixel.2);
     let task_pool = AsyncComputeTaskPool::get();
     
     // Copy primitive values
-    let subpixel = self.subpixel;
+    //let subpixel = self.subpixel;
     let max_subpixel_distance = self.max_subpixel_distance;
     
     // Clone the entire planisphere (if it implements Clone)
@@ -907,9 +979,9 @@ pub fn spawn_terrain_task(&mut self, planisphere: &planisphere::Planisphere) {
         // Now we own planisphere_owned, not borrowing
         compute_mesh_async(&planisphere_owned, subpixel, max_subpixel_distance)
     });
-    
-    let id_string = "zob";
-    self.mesh_tasks.push((id_string.to_string(), task));
+    let task_id = format!("task_{}_{}_{}",i, j, k);
+    eprintln!(" lauched {}", task_id);
+    self.mesh_tasks.push((task_id.to_string(), task));
 }
 
 

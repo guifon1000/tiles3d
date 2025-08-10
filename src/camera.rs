@@ -96,10 +96,10 @@ pub fn update_third_person_camera(
             let desired_pos = player_pos + camera_offset;
             
             // Smoothly interpolate camera position
-            let follow_speed = controller.follow_speed;
-            camera_transform.translation = camera_transform.translation
-                .lerp(desired_pos, follow_speed * delta_time);
-            
+            //let follow_speed = controller.follow_speed;
+            //camera_transform.translation = camera_transform.translation
+            //    .lerp(desired_pos, follow_speed * delta_time);
+            camera_transform.translation = desired_pos;
             // Look at the player (slightly above their position)
             let look_target = player_pos + Vec3::new(0.0, 2.0, 0.0);
             camera_transform.look_at(look_target, Vec3::Y);
