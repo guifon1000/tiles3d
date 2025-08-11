@@ -114,7 +114,7 @@ impl TerrainAssetTracker {
 /// Main function - the entry point of our Rust program
 /// This is where the program starts running when you execute it
 fn main() {
-    let sub_k = 1; // Number of subpixels in the vertical direction
+    let sub_k = 16; // Number of subpixels in the vertical direction
     let image_path = "assets/maps/sphere_texture.png";
 
 
@@ -131,7 +131,7 @@ fn main() {
 
     // Compute initial subpixel from desired geographic coordinates
     let initial_lon = 7.0;
-    let initial_lat = -59.999;
+    let initial_lat = -49.999;
     let (iplayer, jplayer, kplayer) = planisphere.geo_to_subpixel(initial_lon, initial_lat);
     let _subpixel_view_distance = 75;
     let _recreation_threshold  = (0.4 * _subpixel_view_distance as f32) as i32;

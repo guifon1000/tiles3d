@@ -351,6 +351,7 @@ pub fn terrain_mesh(
     let mut triangle_mapping = Vec::<(usize, usize, usize)>::new();
     for (_i, _j, _k, _corners) in subpixels.iter() {
         let (i, j, k) = (*_i, *_j, *_k);
+        let (red, green, blue, alpha) = planisphere.get_rgba_at_subpixel(i, j, k);
         let corners = *_corners;
         let current_pixel_norm_lat = j as f64 / planisphere.height_pixels as f64;
         let current_latitude = current_pixel_norm_lat * 180.0 - 90.0;
@@ -358,16 +359,15 @@ pub fn terrain_mesh(
                 // Create vertices for this subpixel
         for (lon, lat) in corners.iter() {
             let (x, y) = planisphere.geo_to_gnomonic(*lon, *lat, lonlat_gnomocenter.0, lonlat_gnomocenter.1);
-            vertices.push([x as f32, 0.0, y as f32]);
+            vertices.push([x as f32, 100.*alpha as f32, y as f32]);
         }
         let atlas_size = 16; // 16x16 grid
 
         // Texture selection mode - set to true for RGBA-based, false for border-based
         let use_rgba_texture_selection = true;
-        
         let tile_index = if use_rgba_texture_selection {
             // RGBA-based texture selection
-            let (red, green, blue, alpha) = planisphere.get_rgba_at_subpixel(i, j, k);
+            
             select_texture_from_rgba(red, green, blue, alpha)
         } else {
             // Original border-based texture selection
@@ -980,7 +980,7 @@ pub fn spawn_terrain_task(&mut self, planisphere: &planisphere::Planisphere, sub
         compute_mesh_async(&planisphere_owned, subpixel, max_subpixel_distance)
     });
     let task_id = format!("task_{}_{}_{}",i, j, k);
-    eprintln!(" lauched {}", task_id);
+    eprintln!(" launched {}", task_id);
     self.mesh_tasks.push((task_id.to_string(), task));
 }
 

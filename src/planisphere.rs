@@ -302,19 +302,63 @@ impl Planisphere {
         )
     }
     
-    /// Get RGBA values at specific subpixel coordinates
-    /// Since subpixels within a pixel share the same color data, this returns the parent pixel's RGBA values
-    ///
-    /// # Parameters
-    /// * `i` - Horizontal pixel index
-    /// * `j` - Vertical pixel index
-    /// * `k` - Subpixel index (unused for color data, but kept for consistency)
-    ///
-    /// # Returns
-    /// A tuple of (red, green, blue, alpha) values normalized between 0.0 and 1.0
-    pub fn get_rgba_at_subpixel(&self, i: usize, j: usize, _k: usize) -> (f64, f64, f64, f64) {
-        self.get_rgba_at_pixel(i, j)
-    }
+pub fn get_rgba_at_subpixel(&self, i: usize, j: usize, k: usize) -> (f64, f64, f64, f64) {
+    // Fix the boundary handling
+    let jp1 = if j + 1 < self.height_pixels { j + 1 } else { j };
+    let ip1 = if i + 1 < self.width_pixels { i + 1 } else { (i+1)%self.width_pixels }; // Fixed: was j%self.width_pixels
+    let lonlat = self.subpixel_to_geo(i, j, k);
+    let subdiv_lon = self.get_lon_subdivisons(lonlat.1);
+    // Get the four corner pixels
+    let rgba0 = self.get_rgba_at_pixel(i, j);      // top-left
+    let rgba1 = self.get_rgba_at_pixel(i, jp1);    // bottom-left  
+    let rgba2 = self.get_rgba_at_pixel(ip1, jp1);  // bottom-right
+    let rgba3 = self.get_rgba_at_pixel(ip1, j);    // top-right
+    
+    // Extract interpolation parameters from k
+    let u = ((k as f64) / (self.subpixel_divisions as f64)) / (subdiv_lon as f64);           // Fixed: cast to f64
+    let v = ((k % self.subpixel_divisions) as f64)  / (self.subpixel_divisions as f64); // Fixed: normalize v
+    
+    // Perform bilinear interpolation
+    self.bilinear_interpolate(rgba0, rgba1, rgba2, rgba3, u, v)
+}
+
+// Helper function for bilinear interpolation
+fn bilinear_interpolate(
+    &self,
+    rgba0: (f64, f64, f64, f64), // top-left
+    rgba1: (f64, f64, f64, f64), // bottom-left
+    rgba2: (f64, f64, f64, f64), // bottom-right
+    rgba3: (f64, f64, f64, f64), // top-right
+    u: f64, // horizontal interpolation [0,1]
+    v: f64, // vertical interpolation [0,1]
+) -> (f64, f64, f64, f64) {
+    // Clamp u and v to [0,1] range
+    let u = u.clamp(0.0, 1.0);
+    let v = v.clamp(0.0, 1.0);
+    
+    // Bilinear interpolation formula
+    let r = (1.0 - u) * (1.0 - v) * rgba0.0 +  // top-left
+            u * (1.0 - v) * rgba3.0 +          // top-right
+            (1.0 - u) * v * rgba1.0 +          // bottom-left
+            u * v * rgba2.0;                   // bottom-right
+            
+    let g = (1.0 - u) * (1.0 - v) * rgba0.1 +
+            u * (1.0 - v) * rgba3.1 +
+            (1.0 - u) * v * rgba1.1 +
+            u * v * rgba2.1;
+            
+    let b = (1.0 - u) * (1.0 - v) * rgba0.2 +
+            u * (1.0 - v) * rgba3.2 +
+            (1.0 - u) * v * rgba1.2 +
+            u * v * rgba2.2;
+            
+    let a = (1.0 - u) * (1.0 - v) * rgba0.3 +
+            u * (1.0 - v) * rgba3.3 +
+            (1.0 - u) * v * rgba1.3 +
+            u * v * rgba2.3;
+    
+    (r, g, b, a)
+}
 
     /// Converts a grid position (including subpixel) to geographic coordinates
     ///
