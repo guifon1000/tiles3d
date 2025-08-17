@@ -1,8 +1,9 @@
 // Import statements - bring in code from external crates and our own modules
 use bevy::{prelude::*, render::Render};           // Bevy game engine - the * imports everything commonly used
 use bevy_rapier3d::prelude::*;  // Rapier physics engine - handles collision detection and physics
+
 use serde::Deserialize;
-use std::fs::File;
+use std::{collections::btree_set::Range, fs::File};
 use std::io::Read;
 // Module declarations - tell Rust about our other source files
 mod terrain;     // terrain.rs - handles pure terrain mesh generation
@@ -14,7 +15,7 @@ mod player;      // player.rs - handles the player character
 mod planisphere; // planisphere.rs - handles geographic coordinate conversion and projections
 mod ui ;        // ui.rs - handles user interface elements (like text, buttons, etc.)
 mod game_object; // game_object.rs - handles object definitions and spawning logic
-
+mod chunk;
 
 
 // Import the specific functions we need from our modules
@@ -25,8 +26,8 @@ use player::{move_player, check_player_sensors, check_player_ground_sensors, ter
 use ui::{setup_ui, update_coordinate_display}; // UI setup function and coordinate display update system
 use game_object::{setup_object_templates, cleanup_orphaned_overlays, setup_entity_overlays, 
     update_entity_ui_overlays, setup_player}; // Game object spawning and management
-use crate::planisphere::Planisphere;
-
+use crate::{game_object::EntitySubpixelPosition, planisphere::Planisphere};
+use chunk::{ChunksCenter, Chunk, ChunkPixelStripe};
 /// Configuration for terrain generation and management
 #[derive(Resource)]
 pub struct TerrainConfig {
@@ -106,15 +107,24 @@ impl TerrainAssetTracker {
         
         println!("ASSET CLEANUP: Removed {} meshes and {} materials from asset system", 
                  total_meshes_before, total_materials_before);
+
     }
 }
+
+
+#[derive(Resource)]
+pub struct PlayerStart {
+    pub start_ijk: (usize, usize, usize),
+}
+
+
 
 
 
 /// Main function - the entry point of our Rust program
 /// This is where the program starts running when you execute it
 fn main() {
-    let sub_k = 16; // Number of subpixels in the vertical direction
+    let sub_k = 8; // Number of subpixels in the vertical direction
     let image_path = "assets/maps/sphere_texture.png";
 
 
@@ -130,12 +140,25 @@ fn main() {
     eprintln!("Radius set to: {}", radius);
 
     // Compute initial subpixel from desired geographic coordinates
-    let initial_lon = 7.0;
-    let initial_lat = -49.999;
-    let (iplayer, jplayer, kplayer) = planisphere.geo_to_subpixel(initial_lon, initial_lat);
+    let (mut initial_lon, mut initial_lat) = (7.7, -40.25);
+    let (mut iplayer,  mut jplayer, mut kplayer) = planisphere.geo_to_subpixel(initial_lon, initial_lat);
+    let ijk_coordinates = true;
+    if ijk_coordinates == false {
+        initial_lon = 7.7;
+        initial_lat = -40.25;
+        (iplayer, jplayer, kplayer) = planisphere.geo_to_subpixel(initial_lon, initial_lat);
+    }
+    else {
+        let ijk_position = (450, 119, 37);
+        (iplayer, jplayer, kplayer) = ijk_position;
+        (initial_lon, initial_lat) = planisphere.subpixel_to_geo(iplayer, jplayer, kplayer);
+        let dbg_ijk = planisphere.geo_to_subpixel(initial_lon, initial_lat);
+        eprintln!("debug  : back to ijk : {} {} {}      ", dbg_ijk.0, dbg_ijk.1, dbg_ijk.2);
+    }
     let _subpixel_view_distance = 75;
     let _recreation_threshold  = (0.4 * _subpixel_view_distance as f32) as i32;
-
+    let mut chunks_center_resource = ChunksCenter::new(iplayer, jplayer, 0, planisphere.clone(), (4,4));
+    let player_start_resource = PlayerStart{start_ijk: (iplayer, jplayer, kplayer)};
     // Create and configure the Bevy App (the main game engine instance)
     App::new()
         // Add core Bevy plugins that provide essential functionality
@@ -167,6 +190,8 @@ fn main() {
             mesh_tasks: Vec::new(),
             recreation_spawned: false,
         })
+        .insert_resource(chunks_center_resource)
+        .insert_resource(player_start_resource)
         .insert_resource(RenderedSubpixels::new())
         .insert_resource(TriangleSubpixelMapping::default())
         
@@ -174,7 +199,8 @@ fn main() {
         // Systems that run once at startup (world setup)
         .add_systems(Startup, setup_third_person_camera) // Setup camera, physics world, and UI
         .add_systems(Startup, (setup_physics, setup_ui))
-        .add_systems(Startup, (setup_object_templates, setup_player).chain())
+        .add_systems(Startup, (setup_object_templates, setup_player, game_object::raycast_tile_locator_system, 
+            setup_chunks).chain())
         // Systems that run every frame (game loop) - split into groups to avoid tuple size limit
         .add_systems(Update, terrain_recreation_system)     // Handle terrain recreation with asset cleanup and coordinate sync
         .add_systems(Update, update_coordinate_display)      // Update the UI coordinate display with current player position
@@ -216,6 +242,75 @@ fn main() {
         // Start the game loop - this runs until the window is closed
         .run();
 }
+
+
+fn setup_chunks(
+    planisphere: Res<planisphere::Planisphere>,
+    playerstart: Res<PlayerStart>,
+    mut chunks_center: ResMut<ChunksCenter>,
+)
+{
+    let (i,j,_k) = playerstart.start_ijk;
+    let (lon,lat) = planisphere.subpixel_to_geo(i, j, _k);
+    let corners = planisphere.get_pixel_corners(i, j);
+    let mut min_d = 10000000.01;
+    let mut center_corner=(0,0,0);
+    let ijk_corners = planisphere.get_pixel_corners_ijk(i, j);
+    eprintln!("ijk corners : {:?} ",ijk_corners);
+    let stripe = ChunkPixelStripe{subpixel_origin: ijk_corners[0], chunk_size: chunks_center.chunk_size};
+    let (ichunk, jchunk) = stripe.get_chunk_indices(i, j, _k, planisphere.clone());
+    let vec = chunks_center.get_chunk_subpixels(0, 0, planisphere.clone());
+
+    let chunk = Chunk {
+        size: chunks_center.chunk_size,
+        chunk_position: (0,0),
+        subpixels: vec,
+        refinement_level:0,
+    };
+    chunk.mesh(planisphere.clone());
+    //chunks_center.get_chunk_subpixels(1, 0, planisphere.clone());
+    //chunks_center.get_chunk_subpixels(0, 1, planisphere.clone());
+    //chunks_center.get_chunk_subpixels(1, 1, planisphere.clone());
+    //chunks_center.get_chunk_subpixels(0, 1000, planisphere.clone());
+
+    panic!("this is the end...{:?} {:?}",ichunk,jchunk);
+/*     let mut geo_corners: [(f64,f64);4] = [(0.,0.);4];
+    for (ic, corner) in ijk_corners.iter().enumerate(){
+        geo_corners[ic] = planisphere.subpixel_to_geo(corner.0, corner.1, corner.2);
+    }
+    eprintln!("geo corners : {:?}", geo_corners);
+    for (ic,_corner) in geo_corners.iter().enumerate(){
+        let d2 = (lon - _corner.0).powi(2) + (lat-_corner.1).powi(2);
+        let d = ops::sqrt(d2 as f32);
+        if d < min_d {center_corner = ijk_corners[ic]; min_d = d;}
+        eprintln!("CORNERS {:?} distance {}",_corner,d);
+    }
+    eprintln!("chosen center : {:?}", center_corner); */
+
+    
+//for w in 0..64
+//{    
+    let k = _k; //+w;    
+    let pixel_lon_divisions = planisphere.get_lon_subdivisons(lat);
+    let nw = (k/planisphere.subpixel_divisions)  / chunks_center.chunk_size.0;
+    let nh = (k%planisphere.subpixel_divisions)  / chunks_center.chunk_size.1;
+    let chunk_start_subpixel_k = nw* chunks_center.chunk_size.0 * planisphere.subpixel_divisions + nh * chunks_center.chunk_size.1;
+
+    eprintln!("*************************************************************************");
+    eprintln!("Player position : {} {} {} *** subk {} **** nw {} nh {}", i,j,k,planisphere.subpixel_divisions,nw,nh);
+    eprintln!("Player position : {} {}  -----  ",(k/planisphere.subpixel_divisions),  (k%planisphere.subpixel_divisions));
+    eprintln!("k={}          ********** subpixel_chunk_height= {} subpixel_chunk_width= {} ",k,chunks_center.chunk_size.1,chunks_center.chunk_size.1);
+    eprintln!("chunk starts at {}", chunk_start_subpixel_k);
+    eprintln!("pixel {} {} has {} longitudinal subdivisions", i, j, pixel_lon_divisions);
+    eprintln!("*************************************************************************");
+
+    
+//}
+    
+}
+
+
+
 
 /// Setup function for physics world and game objects
 /// This function is called once at startup to create the initial game world

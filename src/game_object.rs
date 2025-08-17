@@ -524,6 +524,7 @@ pub fn spawn_player(
     let player_bundle = crate::player::PlayerBundle {
         ..Default::default()
     };
+    
     let physics_bundle = (
         RigidBody::Dynamic,
         Collider::capsule_y(0.3, 0.4),
@@ -547,7 +548,7 @@ pub fn spawn_player(
                     planisphere,
                     terrain_center,
                     &template,
-                    Vec3::new(0.0, 300.0, 0.),
+                    Vec3::new(0.0, 200.0, 0.),
                     10.0, // Use player's Y position + offset
                     CollisionBehavior::Dynamic, // Set collision behavior to dynamic for dropped items
                     (

@@ -45,7 +45,7 @@ impl Default for PlayerBundle {
                 is_grounded: false,
                 facing_angle: 0.0,
                 mouse_sensitivity: 0.002,
-                move_speed: 15.0,
+                move_speed: 25.0,
 
 
             },

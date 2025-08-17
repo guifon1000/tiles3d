@@ -360,6 +360,36 @@ fn bilinear_interpolate(
     (r, g, b, a)
 }
 
+    pub fn get_nlon_from_j(&self, j: usize) -> usize {
+        let latitude = self.subpixel_to_geo(0, j, 0).1;
+        eprintln!("latitude : {}", latitude);
+        self.get_lon_subdivisons(latitude)
+    }
+
+    pub fn get_pixel_corners_ijk(&self,  i: usize , j: usize)-> [(usize, usize, usize); 4] 
+    {
+        let start_subpixel = (i,j,0 as usize);
+        let (nlon, nlat) = (self.get_nlon_from_j(j), self.subpixel_divisions);
+        eprintln!("pixel shape {:?}", (nlon,nlat));
+        let corner_0 = start_subpixel;
+        let corner_1 = self.get_neighbour_subpixel(i,j,nlat-1, 0, 1);
+        let corner_2 = self.get_neighbour_subpixel(i,j,nlon*nlat-1, 1, 1);
+        let corner_3 = self.get_neighbour_subpixel(i,j,(nlon-1)*nlat,1, 0);
+
+        [corner_0, corner_3, corner_2, corner_1]
+
+
+    }
+
+
+
+
+
+
+
+
+
+
     /// Converts a grid position (including subpixel) to geographic coordinates
     ///
     /// # Parameters
