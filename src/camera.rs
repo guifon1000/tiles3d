@@ -34,7 +34,7 @@ pub fn setup_third_person_camera(mut commands: Commands) {
         Camera3d::default(),  // This makes it a 3D camera
         
         // Set initial camera position (will be updated to follow player)
-        Transform::from_xyz(0.0, 5.0, 8.0)  // Start position: behind and above player
+        Transform::from_xyz(0.0, 5.0, 0.0)  // Start position: behind and above player
             .looking_at(Vec3::new(0.0, 2.0, 0.0), Vec3::Y), // Look at player height
         
         // Add our custom third person camera controller
@@ -67,7 +67,7 @@ pub fn setup_third_person_camera(mut commands: Commands) {
 
 // Removed unused camera_zoom and camera_rotation functions
 
-/// Update third person camera to follow the player
+/// Update camera to follow player from directly above (top-down view)
 /// This function runs every frame and makes the camera follow the player smoothly
 pub fn update_third_person_camera(
     time: Res<Time>,
@@ -75,34 +75,26 @@ pub fn update_third_person_camera(
     mut camera_query: Query<(&mut Transform, &ThirdPersonCamera), With<ThirdPersonCamera>>,
 ) {
     // Get the player's transform and player component
-    if let Ok((player_transform, player)) = player_query.single() {
+    if let Ok((player_transform, _player)) = player_query.single() {
         // Get the camera's transform and controller
         if let Ok((mut camera_transform, controller)) = camera_query.single_mut() {
-            let delta_time = time.delta_secs();
+            let _delta_time = time.delta_secs();
             
-            // Calculate desired camera position based on player position and facing direction
+            // Calculate desired camera position directly above the player
             let player_pos = player_transform.translation;
             
-            // Use the player's facing angle for camera positioning
-            let facing_angle = player.facing_angle;
-            
-            // Calculate camera position behind and above the player
-            let camera_offset = Vec3::new(
-                facing_angle.sin() * controller.distance,  // Behind player in X
-                controller.height,                          // Above player
-                facing_angle.cos() * controller.distance,  // Behind player in Z
+            // Position camera directly above player at specified height
+            let desired_pos = Vec3::new(
+                player_pos.x,           // Same X as player
+                controller.height,      // Fixed height above
+                player_pos.z,           // Same Z as player
             );
             
-            let desired_pos = player_pos + camera_offset;
-            
-            // Smoothly interpolate camera position
-            //let follow_speed = controller.follow_speed;
-            //camera_transform.translation = camera_transform.translation
-            //    .lerp(desired_pos, follow_speed * delta_time);
+            // Set camera position directly (no smoothing for immediate response)
             camera_transform.translation = desired_pos;
-            // Look at the player (slightly above their position)
-            let look_target = player_pos + Vec3::new(0.0, 2.0, 0.0);
-            camera_transform.look_at(look_target, Vec3::Y);
+            
+            // Look straight down at the player
+            camera_transform.look_at(player_pos, Vec3::Z); // Use Z as up vector for top-down
         }
     }
 }
@@ -119,8 +111,8 @@ pub fn third_person_camera_rotation(
     // The camera follows the player's orientation automatically
 }
 
-/// Handle mouse wheel zoom for the third person camera
-/// This function adjusts the camera distance based on mouse scroll input
+/// Handle mouse wheel for camera height control (zoom in/out from above)
+/// This function adjusts the camera height based on mouse scroll input
 pub fn handle_camera_zoom(
     time: Res<Time>,
     mut scroll_events: EventReader<MouseWheel>,
@@ -137,22 +129,23 @@ pub fn handle_camera_zoom(
                 MouseScrollUnit::Pixel => scroll_event.y * 0.1, // Touchpad or high-precision scroll (pixels)
             };
             
-            // Calculate zoom change (negative scroll = zoom in, positive = zoom out)
-            let zoom_change = -scroll_delta * camera.zoom_speed * delta_time * 10.0; // Scale factor for responsiveness
+            // Calculate height change (negative scroll = zoom in/lower, positive = zoom out/higher)
+            let height_change = scroll_delta * camera.height_speed * delta_time * 2.0; // Scale factor for responsiveness
             
-            // Update distance and clamp to min/max bounds
-            camera.distance = (camera.distance + zoom_change).clamp(camera.min_distance, camera.max_distance);
+            // Update height and clamp to min/max bounds
+            camera.height = (camera.height + height_change).clamp(camera.min_height, camera.max_height);
             
-            // Optional: Print zoom level for debugging
+            // Optional: Print height level for debugging
             if scroll_delta != 0.0 {
-                println!("Camera zoom: {:.1} (range: {:.1} - {:.1})", camera.distance, camera.min_distance, camera.max_distance);
+                println!("Camera height: {:.1} (range: {:.1} - {:.1})", camera.height, camera.min_height, camera.max_height);
             }
         }
     }
 }
 
-/// Handle camera height control using up/down arrow keys
+/// Handle camera height control using PageUp/PageDown keys
 /// This function adjusts the camera height while keeping it focused on the player
+/// Arrow keys are now used for player rotation
 pub fn handle_camera_height(
     time: Res<Time>,
     keyboard_input: Res<ButtonInput<KeyCode>>,
@@ -163,11 +156,11 @@ pub fn handle_camera_height(
         let delta_time = time.delta_secs();
         let mut height_change = 0.0;
         
-        // Check for up/down arrow key presses
-        if keyboard_input.pressed(KeyCode::ArrowUp) {
+        // Check for PageUp/PageDown key presses (since arrow keys are now used for player rotation)
+        if keyboard_input.pressed(KeyCode::PageUp) {
             height_change += camera.height_speed * delta_time;
         }
-        if keyboard_input.pressed(KeyCode::ArrowDown) {
+        if keyboard_input.pressed(KeyCode::PageDown) {
             height_change -= camera.height_speed * delta_time;
         }
         

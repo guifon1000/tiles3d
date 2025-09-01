@@ -251,20 +251,23 @@ pub fn drop_stone(
 pub fn move_player(
     time: Res<Time>,                                    // Bevy's time resource
     keyboard_input: Res<ButtonInput<KeyCode>>,         // Keyboard input state
-    mut mouse_motion: EventReader<MouseMotion>,        // Mouse movement events
+    mut _mouse_motion: EventReader<MouseMotion>,        // Mouse movement events (now unused)
     mut query: Query<(&mut ExternalImpulse, &mut Transform, &mut Player, &mut Velocity)>,
 ) {
     // Removed map_boundary - player can move freely
     let current_time = time.elapsed_secs();            // How many seconds since the game started
-    let _delta_time = time.delta_secs();                // Time since last frame
+    let delta_time = time.delta_secs();                // Time since last frame
     
     // Process the player entity
     for (_impulse, mut transform, mut player, mut velocity) in query.iter_mut() {
         
-        // MOUSE LOOK - Update facing direction based on mouse movement
-        for motion in mouse_motion.read() {
-            // Update facing angle based on horizontal mouse movement
-            player.facing_angle -= motion.delta.x * player.mouse_sensitivity;
+        // ARROW KEY ROTATION - Update facing direction based on left/right arrows
+        let rotation_speed = 3.0; // radians per second
+        if keyboard_input.pressed(KeyCode::ArrowLeft) {
+            player.facing_angle += rotation_speed * delta_time;
+        }
+        if keyboard_input.pressed(KeyCode::ArrowRight) {
+            player.facing_angle -= rotation_speed * delta_time;
         }
         
         // Always update the visual rotation to match the facing angle
@@ -291,11 +294,11 @@ pub fn move_player(
             let right_dir = transform.right();
             let mut movement = Vec3::ZERO;
             
-            // FORWARD/BACKWARD MOVEMENT
-            if keyboard_input.pressed(KeyCode::KeyW) || keyboard_input.pressed(KeyCode::ArrowUp) {
+            // FORWARD/BACKWARD MOVEMENT (only WASD keys now)
+            if keyboard_input.pressed(KeyCode::KeyW) {
                 movement += forward_dir * player.move_speed;  // Forward
             }
-            if keyboard_input.pressed(KeyCode::KeyS) || keyboard_input.pressed(KeyCode::ArrowDown) {
+            if keyboard_input.pressed(KeyCode::KeyS) {
                 movement -= forward_dir * player.move_speed * 0.5;  // Backward (slower)
             }
             

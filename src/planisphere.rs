@@ -516,7 +516,150 @@ fn bilinear_interpolate(
     ///
     /// # Returns
     /// A tuple (i, j, k) representing the coordinates of the neighbor subpixel
-    pub fn get_neighbour_subpixel(&self, i: usize, j: usize, k: usize, di: i32, dj: i32) -> (usize, usize, usize) {
+    /// 
+    /// 
+    /// 
+    /// 
+    pub fn get_neighbour_subpixelXXX(&self, i: usize, j: usize, k: usize, di: i32, dj: i32) -> (usize, usize, usize) {
+    let sub_i = k / self.subpixel_divisions;
+    let sub_j = k % self.subpixel_divisions;
+
+    // Calculate longitude subdivisions for current pixel
+    let current_pixel_norm_lat = j as f64 / self.height_pixels as f64;
+    let current_latitude = current_pixel_norm_lat * 180.0 - 90.0;
+    let current_lon_subdivisions = (self.subpixel_divisions as f64 * current_latitude.to_radians().cos())
+        .max(1.0) as usize;
+
+    // Calculate new subpixel coordinates
+    let mut new_sub_i = sub_i as i32 + di;
+    let mut new_sub_j = sub_j as i32 + dj;
+    let mut pixel_di = 0;
+    let mut pixel_dj = 0;
+
+    // Handle i-direction (longitude) overflow/underflow
+    if new_sub_i >= current_lon_subdivisions as i32 {
+        pixel_di = 1;
+        new_sub_i -= current_lon_subdivisions as i32;
+    } else if new_sub_i < 0 {
+        pixel_di = -1;
+        new_sub_i += current_lon_subdivisions as i32;
+        // If still negative, we've moved multiple pixels west
+        while new_sub_i < 0 {
+            pixel_di -= 1;
+            new_sub_i += current_lon_subdivisions as i32;
+        }
+    }
+
+    // Handle j-direction (latitude) overflow/underflow
+    if new_sub_j >= self.subpixel_divisions as i32 {
+        pixel_dj = 1;
+        new_sub_j -= self.subpixel_divisions as i32;
+    } else if new_sub_j < 0 {
+        pixel_dj = -1;
+        new_sub_j += self.subpixel_divisions as i32;
+    }
+
+    // Early return if no pixel boundary crossed
+    if pixel_di == 0 && pixel_dj == 0 {
+        let new_k = (new_sub_i as usize) * self.subpixel_divisions + (new_sub_j as usize);
+        return (i, j, new_k);
+    }
+
+    // Get neighboring pixel (with wrapping)
+    let (wrapped_i, wrapped_j) = self.get_neighbour(i, j, pixel_di, pixel_dj);
+
+    // Adjust for north/south transitions (latitude change)
+    let mut final_sub_i = new_sub_i;
+    if pixel_dj != 0 {
+        let target_pixel_norm_lat = wrapped_j as f64 / self.height_pixels as f64;
+        let target_latitude = target_pixel_norm_lat * 180.0 - 90.0;
+        let target_lon_subdivisions = (self.subpixel_divisions as f64 * target_latitude.to_radians().cos())
+            .max(1.0) as usize;
+        // Scale sub_i proportionally to new longitude subdivisions
+        final_sub_i = ((sub_i as f64 * target_lon_subdivisions as f64) / current_lon_subdivisions as f64)
+            .round()
+            .clamp(0.0, (target_lon_subdivisions - 1) as f64) as i32;
+    }
+
+    // Clamp subpixel indices to valid ranges
+    let final_sub_i = final_sub_i.clamp(0, (current_lon_subdivisions - 1) as i32);
+    let final_sub_j = new_sub_j.clamp(0, (self.subpixel_divisions - 1) as i32);
+
+    let new_k = (final_sub_i as usize) * self.subpixel_divisions + (final_sub_j as usize);
+    (wrapped_i as usize, wrapped_j as usize, new_k)
+}
+
+
+pub fn get_neighbour_subpixel(
+    &self,
+    i: usize,
+    j: usize,
+    k: usize,
+    di: i32,
+    dj: i32,
+) -> (usize, usize, usize) {
+    // Decompose subpixel index into (sub_i, sub_j)
+    let sub_i = (k / self.subpixel_divisions) as i32;
+    let sub_j = (k % self.subpixel_divisions) as i32;
+
+    // Get longitude subdivisions for the current pixel (depends on latitude)
+    let current_pixel_norm_lat = j as f64 / self.height_pixels as f64;
+    let current_latitude = current_pixel_norm_lat * 180.0 - 90.0;
+    let current_lon_subdivisions = (self.subpixel_divisions as f64 * current_latitude.to_radians().cos())
+        .max(1.0) as usize;
+
+    // Compute new subpixel coordinates
+    let mut new_sub_i = sub_i + di;
+    let mut new_sub_j = sub_j + dj;
+
+    // Compute pixel-level movement (di_pixels, dj_pixels)
+    let mut pixel_di = 0;
+    let mut pixel_dj = 0;
+
+    // Handle longitude (i-direction) overflow/underflow
+    if new_sub_i >= current_lon_subdivisions as i32 {
+        pixel_di = new_sub_i / current_lon_subdivisions as i32;
+        new_sub_i %= current_lon_subdivisions as i32;
+    } else if new_sub_i < 0 {
+        pixel_di = (new_sub_i + 1) / current_lon_subdivisions as i32 - 1; // Ceiling division
+        new_sub_i -= pixel_di * current_lon_subdivisions as i32;
+    }
+
+    // Handle latitude (j-direction) overflow/underflow
+    if new_sub_j >= self.subpixel_divisions as i32 {
+        pixel_dj = new_sub_j / self.subpixel_divisions as i32;
+        new_sub_j %= self.subpixel_divisions as i32;
+    } else if new_sub_j < 0 {
+        pixel_dj = (new_sub_j + 1) / self.subpixel_divisions as i32 - 1; // Ceiling division
+        new_sub_j -= pixel_dj * self.subpixel_divisions as i32;
+    }
+
+    // Compute new pixel coordinates (with planet wrapping)
+    let new_i = (i as i32 + pixel_di).rem_euclid(self.width_pixels as i32) as usize;
+    let new_j = (j as i32 + pixel_dj).clamp(0, self.height_pixels as i32 - 1) as usize;
+
+    // If we moved in latitude (j-direction), recalculate longitude subdivisions
+    let new_lon_subdivisions = if pixel_dj != 0 {
+        let new_pixel_norm_lat = new_j as f64 / self.height_pixels as f64;
+        let new_latitude = new_pixel_norm_lat * 180.0 - 90.0;
+        (self.subpixel_divisions as f64 * new_latitude.to_radians().cos())
+            .max(1.0) as usize
+    } else {
+        current_lon_subdivisions
+    };
+
+    // Clamp new_sub_i to the new pixel's longitude subdivisions
+    new_sub_i = new_sub_i.clamp(0, new_lon_subdivisions as i32 - 1);
+
+    // Reconstruct the new subpixel index
+    let new_k = (new_sub_i as usize) * self.subpixel_divisions + (new_sub_j as usize);
+
+    (new_i, new_j, new_k)
+}
+
+
+
+    pub fn get_neighbour_subpixelYYYY(&self, i: usize, j: usize, k: usize, di: i32, dj: i32) -> (usize, usize, usize) {
         // Extract subpixel coordinates
         let sub_i = k / self.subpixel_divisions;
         let sub_j = k % self.subpixel_divisions;

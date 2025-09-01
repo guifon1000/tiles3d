@@ -548,7 +548,7 @@ pub fn spawn_player(
                     planisphere,
                     terrain_center,
                     &template,
-                    Vec3::new(0.0, 200.0, 0.),
+                    Vec3::new(0.0, 5.0, 0.),
                     10.0, // Use player's Y position + offset
                     CollisionBehavior::Dynamic, // Set collision behavior to dynamic for dropped items
                     (

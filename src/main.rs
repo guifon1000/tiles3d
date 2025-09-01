@@ -1,7 +1,7 @@
 // Import statements - bring in code from external crates and our own modules
 use bevy::{prelude::*, render::Render};           // Bevy game engine - the * imports everything commonly used
 use bevy_rapier3d::prelude::*;  // Rapier physics engine - handles collision detection and physics
-
+use bevy::pbr::wireframe::{Wireframe, WireframePlugin, WireframeConfig};
 use serde::Deserialize;
 use std::{collections::btree_set::Range, fs::File};
 use std::io::Read;
@@ -117,6 +117,11 @@ pub struct PlayerStart {
     pub start_ijk: (usize, usize, usize),
 }
 
+#[derive(Resource, Default)]
+pub struct ChunksCreated {
+    pub created: bool,
+}
+
 
 
 
@@ -142,14 +147,14 @@ fn main() {
     // Compute initial subpixel from desired geographic coordinates
     let (mut initial_lon, mut initial_lat) = (7.7, -40.25);
     let (mut iplayer,  mut jplayer, mut kplayer) = planisphere.geo_to_subpixel(initial_lon, initial_lat);
-    let ijk_coordinates = true;
+    let ijk_coordinates = false;
     if ijk_coordinates == false {
         initial_lon = 7.7;
         initial_lat = -40.25;
         (iplayer, jplayer, kplayer) = planisphere.geo_to_subpixel(initial_lon, initial_lat);
     }
     else {
-        let ijk_position = (450, 119, 37);
+        let ijk_position = (450, 119, (sub_k+1)*sub_k/2+3);
         (iplayer, jplayer, kplayer) = ijk_position;
         (initial_lon, initial_lat) = planisphere.subpixel_to_geo(iplayer, jplayer, kplayer);
         let dbg_ijk = planisphere.geo_to_subpixel(initial_lon, initial_lat);
@@ -157,12 +162,15 @@ fn main() {
     }
     let _subpixel_view_distance = 75;
     let _recreation_threshold  = (0.4 * _subpixel_view_distance as f32) as i32;
-    let mut chunks_center_resource = ChunksCenter::new(iplayer, jplayer, 0, planisphere.clone(), (4,4));
+    let mut chunks_center_resource = ChunksCenter::new(iplayer, jplayer, 0, planisphere.clone(), (1,1));
     let player_start_resource = PlayerStart{start_ijk: (iplayer, jplayer, kplayer)};
     // Create and configure the Bevy App (the main game engine instance)
     App::new()
         // Add core Bevy plugins that provide essential functionality
         .add_plugins(DefaultPlugins)              // Graphics, audio, input, windowing, etc.
+        
+        // Add wireframe plugin for debugging
+        .add_plugins(WireframePlugin::default())
         
         // Add physics simulation
         .add_plugins(RapierPhysicsPlugin::<NoUserData>::default()) // 3D physics with no custom user data
@@ -192,15 +200,20 @@ fn main() {
         })
         .insert_resource(chunks_center_resource)
         .insert_resource(player_start_resource)
+        .insert_resource(ChunksCreated::default())
         .insert_resource(RenderedSubpixels::new())
         .insert_resource(TriangleSubpixelMapping::default())
+        .insert_resource(WireframeConfig {
+            global: false,  // Back to component-based wireframe
+            default_color: Color::WHITE,
+        })
         
         
         // Systems that run once at startup (world setup)
         .add_systems(Startup, setup_third_person_camera) // Setup camera, physics world, and UI
         .add_systems(Startup, (setup_physics, setup_ui))
-        .add_systems(Startup, (setup_object_templates, setup_player, game_object::raycast_tile_locator_system, 
-            setup_chunks).chain())
+        .add_systems(Startup, (setup_object_templates, setup_player, game_object::raycast_tile_locator_system,).chain())
+        .add_systems(Startup, setup_chunks)
         // Systems that run every frame (game loop) - split into groups to avoid tuple size limit
         .add_systems(Update, terrain_recreation_system)     // Handle terrain recreation with asset cleanup and coordinate sync
         .add_systems(Update, update_coordinate_display)      // Update the UI coordinate display with current player position
@@ -243,37 +256,207 @@ fn main() {
         .run();
 }
 
-
-fn setup_chunks(
-    planisphere: Res<planisphere::Planisphere>,
+fn setup_chunks_MISTRAL(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    planisphere: Res<Planisphere>,
     playerstart: Res<PlayerStart>,
     mut chunks_center: ResMut<ChunksCenter>,
+    mut chunks_created: ResMut<ChunksCreated>,
+    terrain_center: Res<TerrainCenter>,
+) {
+    eprintln!("=== SETUP_CHUNKS SYSTEM STARTED ===");
+    if chunks_created.created {
+        eprintln!("Chunks already created, returning");
+        return;
+    }
+    chunks_created.created = true;
+    eprintln!("Starting chunk creation process");
+
+    let (i, j, k) = playerstart.start_ijk;
+    eprintln!("Player start ijk: {} {} {}", i, j, k);
+
+    // Get chunk indices for player position
+    let stripe = ChunkPixelStripe {
+        subpixel_origin: planisphere.get_pixel_corners_ijk(i, j)[0],
+        chunk_size: chunks_center.chunk_size,
+    };
+    let (ichunk, jchunk) = stripe.get_chunk_indices(i, j, k, planisphere.clone());
+    eprintln!("Player is in chunk indices: ({}, {})", ichunk, jchunk);
+
+    let render_chunk_distance = 1;
+    let mut not_rendered_chunks = 0;
+    let mut rendered_chunks = 0;
+
+    // Calculate chunk world size and half-size for proper positioning
+    let chunk_world_size_x = chunks_center.chunk_size.0 as f32 * planisphere.mean_tile_size as f32;
+    let chunk_world_size_z = chunks_center.chunk_size.1 as f32 * planisphere.mean_tile_size as f32;
+    let half_chunk_x = chunk_world_size_x / 2.0;
+    let half_chunk_z = chunk_world_size_z / 2.0;
+
+    // Process chunks in a grid around the player's chunk
+    for di in -render_chunk_distance..=render_chunk_distance {
+        for dj in -render_chunk_distance..=render_chunk_distance {
+            let chunk_i = ichunk as i32 + di;
+            let chunk_j = jchunk as i32 + dj;
+
+            eprintln!("\nProcessing chunk at indices: ({}, {})", chunk_i, chunk_j);
+
+            // Get subpixels for this chunk
+            let subpixels = chunks_center.get_chunk_subpixels(chunk_i, chunk_j, planisphere.clone());
+            if subpixels.is_empty() {
+                eprintln!("Skipping empty chunk at ({}, {})", chunk_i, chunk_j);
+                not_rendered_chunks += 1;
+                continue;
+            }
+
+            // Create chunk mesh
+            let chunk = Chunk {
+                size: chunks_center.chunk_size,
+                chunk_position: (di, dj),
+                subpixels,
+                refinement_level: 0,
+            };
+
+            let mesh = chunk.mesh(&planisphere, (terrain_center.longitude, terrain_center.latitude));
+
+            // Create material
+            let material_handle = materials.add(StandardMaterial {
+                base_color: Color::srgba(0.2, 0.8, 0.2, 1.0),
+                metallic: 0.0,
+                perceptual_roughness: 1.0,
+                ..default()
+            });
+
+            // Calculate world position with proper offset to make chunks touch
+            // The key is to position each chunk at its corner, not center
+            let world_x = di as f32 * chunk_world_size_x;
+            let world_z = dj as f32 * chunk_world_size_z;
+
+            // Spawn entity
+            let entity = commands.spawn((
+                Mesh3d(meshes.add(mesh)),
+                MeshMaterial3d(material_handle),
+                Transform::from_translation(Vec3::new(world_x, 0.0, world_z)),
+            )).id();
+
+            commands.entity(entity).insert(Wireframe);
+            rendered_chunks += 1;
+        }
+    }
+
+    eprintln!("Successfully rendered {} chunks, {} chunks skipped", rendered_chunks, not_rendered_chunks);
+}
+
+
+
+fn setup_chunks(
+    
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    planisphere: Res<planisphere::Planisphere>,
+    playerstart: Res<PlayerStart>,
+    chunks_center: ResMut<ChunksCenter>,
+    mut chunks_created: ResMut<ChunksCreated>,
+    terrain_center: Res<TerrainCenter>,
+    
 )
 {
+    eprintln!("=== SETUP_CHUNKS SYSTEM STARTED ===");
+    if chunks_created.created {
+        eprintln!("Chunks already created, returning");
+        return;
+    }
+    chunks_created.created = true;
+    eprintln!("Starting chunk creation process");
+    
     let (i,j,_k) = playerstart.start_ijk;
-    let (lon,lat) = planisphere.subpixel_to_geo(i, j, _k);
-    let corners = planisphere.get_pixel_corners(i, j);
-    let mut min_d = 10000000.01;
-    let mut center_corner=(0,0,0);
+    eprintln!("Player start ijk: {} {} {}", i, j, _k);
+    let (_lon,lat) = planisphere.subpixel_to_geo(i, j, _k);
     let ijk_corners = planisphere.get_pixel_corners_ijk(i, j);
     eprintln!("ijk corners : {:?} ",ijk_corners);
     let stripe = ChunkPixelStripe{subpixel_origin: ijk_corners[0], chunk_size: chunks_center.chunk_size};
     let (ichunk, jchunk) = stripe.get_chunk_indices(i, j, _k, planisphere.clone());
-    let vec = chunks_center.get_chunk_subpixels(0, 0, planisphere.clone());
+    eprintln!("Player is in chunk indices: ({}, {})", ichunk, jchunk);
+    let render_chunk_distance = 1; // Reduce for debugging
+    let mut not_rendered_chunks = 0;
+    let mut rendered_chunks = 0;
+    for di in -render_chunk_distance..(render_chunk_distance +1){
+        for dj in -render_chunk_distance..(render_chunk_distance +1){
+            let chunk_i = ichunk as i32 + di as i32;
+            let chunk_j = jchunk as i32 + dj as i32;
+            
+            // Allow negative chunk indices - they represent valid neighboring chunks
+            eprintln!("\n************Processing chunk at indices: ({}, {})************\n", chunk_i, chunk_j);
+            
+            //let start_vec = chunks_center.get_chunk_start_subpixel(chunk_i, chunk_j, planisphere.clone());
+            //eprintln!("Chunk start subpixel ijk: {:?}", start_vec);
+            let vec = chunks_center.get_chunk_subpixels(chunk_i, chunk_j, planisphere.clone());
+            if vec.is_empty() {
+                eprintln!("Skipping chunk at ({}, {}) - empty subpixel vector", di, dj);
+                not_rendered_chunks += 1;
+                continue;
+            }
+            eprintln!("Chunk at offset ({}, {}) has {} subpixels : {:?}", di, dj, vec.len(), vec);
+            let chunk = Chunk {
+                size: chunks_center.chunk_size,
+                chunk_position: (di,dj),
+                subpixels: vec,
+                refinement_level:0,
+            };
+            let chunk_mesh = chunk.mesh(&planisphere.clone(),(terrain_center.longitude, terrain_center.latitude));
+            eprintln!("Chunk mesh created with {} vertices and {} triangles", 
+                chunk_mesh.count_vertices(), 
+                chunk_mesh.indices().map(|i| i.len() / 3).unwrap_or(0));
+            
+            let terrain_material_handle = materials.add(StandardMaterial {
+                base_color: Color::srgba(0.2, 0.8, 0.2, 1.0), // Darker green to better see white wireframe
+                metallic: 0.0,
+                perceptual_roughness: 1.0,
+                cull_mode: None,
+                alpha_mode: AlphaMode::Opaque,
+                unlit: false, // Enable lighting for better depth perception
+                ..default()
+            });
+            
+            let terrain_mesh_handle = meshes.add(chunk_mesh);
+            let terrain_entity_id = commands.spawn((
+                Mesh3d(terrain_mesh_handle.clone()),
+                MeshMaterial3d(terrain_material_handle.clone()),
+                Transform::from_translation(Vec3::new(0.0, 0.0, 0.0)),
+            )).id();
+            
+            // Add wireframe component after entity creation
+            commands.entity(terrain_entity_id).insert(Wireframe);
+        
+            eprintln!("**********Created chunk entity {:?} at position ({}, {})**********\n", terrain_entity_id, di, dj);
+            rendered_chunks += 1;
 
-    let chunk = Chunk {
-        size: chunks_center.chunk_size,
-        chunk_position: (0,0),
-        subpixels: vec,
-        refinement_level:0,
-    };
-    chunk.mesh(planisphere.clone());
+        }
+    }
+    eprintln!("Successfully rendered {} chunks, {} chunks skipped", rendered_chunks, not_rendered_chunks);
+    
+
+
+    
+    //panic!("metal");
+    // === MATERIAL SETUP FOR TERRAIN TEXTURES ===
+    // Configure the standard material for terrain rendering
+
+        // Spawn single terrain entity
+
+
+
+
+
     //chunks_center.get_chunk_subpixels(1, 0, planisphere.clone());
     //chunks_center.get_chunk_subpixels(0, 1, planisphere.clone());
     //chunks_center.get_chunk_subpixels(1, 1, planisphere.clone());
     //chunks_center.get_chunk_subpixels(0, 1000, planisphere.clone());
 
-    panic!("this is the end...{:?} {:?}",ichunk,jchunk);
+    //panic!("this is the end...{:?} {:?}",ichunk,jchunk);
 /*     let mut geo_corners: [(f64,f64);4] = [(0.,0.);4];
     for (ic, corner) in ijk_corners.iter().enumerate(){
         geo_corners[ic] = planisphere.subpixel_to_geo(corner.0, corner.1, corner.2);
