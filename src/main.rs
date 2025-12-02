@@ -162,7 +162,7 @@ fn main() {
     }
     let _subpixel_view_distance = 75;
     let _recreation_threshold  = (0.4 * _subpixel_view_distance as f32) as i32;
-    let mut chunks_center_resource = ChunksCenter::new(iplayer, jplayer, 0, planisphere.clone(), (1,1));
+    let mut chunks_center_resource = ChunksCenter::new(iplayer, jplayer, 0, planisphere.clone(), (8,8));
     let player_start_resource = PlayerStart{start_ijk: (iplayer, jplayer, kplayer)};
     // Create and configure the Bevy App (the main game engine instance)
     App::new()

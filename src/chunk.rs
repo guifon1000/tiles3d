@@ -108,7 +108,8 @@ fn get_vertex_subpixel_coords(
         // Top edge
         (i, j) if i < cols && j == rows => {
             eprintln!("Getting vertex subpixel coords for top edge ({},{})\n", i, j);
-            let base_subpixel = self.subpixels[i * rows + (rows - 1)]; // Topmost row of current chunk
+            let base_index = if rows == 1 { 0 } else { i * rows + (rows - 1) };
+            let base_subpixel = self.subpixels[base_index];
             eprintln!(" Base subpixel: {:?}", base_subpixel);
             eprintln!(" Top edge: {:?}", planisphere.get_neighbour_subpixel(
                 base_subpixel.0,
@@ -126,7 +127,8 @@ fn get_vertex_subpixel_coords(
         // Right edge 
         (i, j) if i == cols && j < rows => {
             eprintln!("Getting vertex subpixel coords for right edge ({},{})\n", i, j);
-            let base_subpixel = self.subpixels[(cols - 1) * rows + j]; // Rightmost column of current chunk
+            let base_index = if cols == 1 { 0 } else { (cols - 1) * rows + j };
+            let base_subpixel = self.subpixels[base_index];
             eprintln!(" Base subpixel: {:?}", base_subpixel);
             eprintln!(" Right edge: {:?}", planisphere.get_neighbour_subpixel(
                 base_subpixel.0,
@@ -144,7 +146,8 @@ fn get_vertex_subpixel_coords(
 
                 (i, j) if i == cols && j == rows => {
             eprintln!("Getting vertex subpixel coords for nortWest corner ({},{})\n", i, j);
-            let base_subpixel = self.subpixels[rows  * cols -1]; // Rightmost column of current chunk
+            let base_index = if rows == 1 && cols == 1 { 0 } else { rows * cols - 1 };
+            let base_subpixel = self.subpixels[base_index];
             eprintln!(" Base subpixel: {:?}", base_subpixel);
             eprintln!(" NorthWest edge: {:?}", planisphere.get_neighbour_subpixel(
                 base_subpixel.0,
