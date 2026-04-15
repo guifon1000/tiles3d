@@ -46,7 +46,6 @@ pub fn create_items(
     planisphere: &Planisphere,
     center_lon: f64,
     center_lat: f64,
-    _terrain_config: &crate::TerrainConfig, // Not used anymore since we use triangle mapping
     triangle_mapping: &crate::terrain::TriangleSubpixelMapping,
 ) {
     println!("Creating items using terrain triangle mapping with {} triangles", triangle_mapping.triangle_to_subpixel.len());
@@ -103,7 +102,8 @@ pub fn create_items(
         
         // Sparse item placement using position-based randomization
         let item_hash = ((i * 8191) ^ (j * 6367) ^ (k * 5273)) % 1000;
-        if item_hash > 15 { // Only 1.5% chance of item placement
+        let spawn_threshold = (crate::config::terrain::SPAWN_PROBABILITY * 1000.0) as usize;
+        if item_hash > spawn_threshold {
             continue;
         }
         

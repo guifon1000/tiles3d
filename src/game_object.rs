@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use bevy_rapier3d::prelude::*;
 use crate::player::Player;
 use crate::planisphere::{self, Planisphere};
-use crate::terrain::{self, ijk_to_world, TerrainCenter};
+use crate::terrain::{ijk_to_world, TerrainCenter};
 
 
 trait IntoWorldPosition{
@@ -373,14 +373,18 @@ pub fn raycast_tile_locator_system(
                         continue; // Skip non-triangle hits
                     }
                 };
-                // Apply same offset detection as green marker
+                // Rapier sometimes reports triangle indices that are offset by a multiple of the
+                // mapping size (possibly due to compound-shape indexing). This heuristic strips
+                // the offset so we land inside the valid mapping range. It's a workaround: the
+                // root cause is that Rapier's face index for a trimesh can include a shape-level
+                // prefix when multiple colliders share an ID space.
                 if terrain_center.triangle_mapping.triangle_to_subpixel.len() > 0
-                {                
+                {
                 let adjusted_triangle_index = if triangle_index >= terrain_center.triangle_mapping.triangle_to_subpixel.len() as u32 {
                     let mapping_size = terrain_center.triangle_mapping.triangle_to_subpixel.len() as u32;
                     let potential_offset = (triangle_index / mapping_size) * mapping_size;
                     let corrected_index = triangle_index - potential_offset;
-                    
+
                     if corrected_index < mapping_size {
                         corrected_index
                     } else {

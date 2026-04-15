@@ -67,41 +67,27 @@ pub fn setup_ui(mut commands: Commands) {
 /// - Subpixel coordinates (I, J, K) in the tile grid
 /// UPDATED: Display coordinates using new shared positioning component
 pub fn update_coordinate_display(
-    // Try to get player position from new shared component first, fallback to old resource
-    player_query: Query<(Entity, &Transform, &EntitySubpixelPosition, &Player)>,
+    player_query: Query<(&Transform, &EntitySubpixelPosition), With<Player>>,
     _terrain_center: Res<TerrainCenter>,
     mut text_query: Query<&mut Text, With<CoordinateDisplay>>,
-    planisphere : Res<planisphere::Planisphere>,
+    planisphere: Res<planisphere::Planisphere>,
 ) {
-    let  mut _world_pos  = Vec3::ZERO;
-    for mut text in text_query.iter_mut() {
-        // Get coordinates from new shared component if available, otherwise use old resource
-        for (_entity, transform, ijkpos, _player   ) in player_query.iter() {
-            // Use the transform to get world position
-            let world_pos = transform.translation;
-            
-            // Get geographic coordinates and subpixel from the shared component
-            let geo_coords = planisphere.subpixel_to_geo(ijkpos.subpixel.0, ijkpos.subpixel.1, ijkpos.subpixel.2); // (lon, lat)
-            let subpixel: (usize, usize, usize) = ijkpos.subpixel;     // (i, j, k)
-            
-            // Use the new shared component for source identification
-            let source = "RAYCAST"; // or "PLAYER" if using a different method
-            
-            // Format the coordinate information into a readable display
-            let coordinate_text = format!(
-                "Player Position ({}):\n\
-                World: ({:.2}, {:.2}, {:.2})\n\
-                Geo: ({:.6}°, {:.6}°)\n\
-                Tile: ({}, {}, {})",
-                source,                                   // Show which method was used
-                world_pos.x, world_pos.y, world_pos.z,  // World coordinates with 2 decimal places
-                geo_coords.0, geo_coords.1,              // Geographic coordinates with 6 decimal places
-                subpixel.0, subpixel.1, subpixel.2       // Subpixel coordinates as integers
-            );
-            
-            // Update the text content
-            **text = coordinate_text;
-        }
- 
-    }
+    let Ok((transform, ijkpos)) = player_query.single() else { return; };
+    let Ok(mut text) = text_query.single_mut() else { return; };
+
+    let world_pos = transform.translation;
+    let geo_coords = planisphere.subpixel_to_geo(ijkpos.subpixel.0, ijkpos.subpixel.1, ijkpos.subpixel.2);
+    let subpixel: (usize, usize, usize) = ijkpos.subpixel;
+
+    let coordinate_text = format!(
+        "Player Position:\n\
+        World: ({:.2}, {:.2}, {:.2})\n\
+        Geo: ({:.6}°, {:.6}°)\n\
+        Tile: ({}, {}, {})",
+        world_pos.x, world_pos.y, world_pos.z,
+        geo_coords.0, geo_coords.1,
+        subpixel.0, subpixel.1, subpixel.2
+    );
+
+    **text = coordinate_text;
 }

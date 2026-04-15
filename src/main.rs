@@ -1,18 +1,14 @@
 // Import statements - bring in code from external crates and our own modules
-use bevy::{prelude::*, render::Render};           // Bevy game engine - the * imports everything commonly used
-use bevy_rapier3d::prelude::*;  // Rapier physics engine - handles collision detection and physics
-use serde::Deserialize;
-use std::fs::File;
-use std::io::Read;
+use bevy::prelude::*;
+use bevy_rapier3d::prelude::*;
 // Module declarations - tell Rust about our other source files
+mod config;      // config.rs - centralized constants for terrain, player, camera, etc.
 mod terrain;     // terrain.rs - handles pure terrain mesh generation
 mod landscape;   // landscape.rs - handles trees, rocks, items, and decorative elements
-mod beacons;     // beacons.rs - handles debug beacons and visualization markers
-mod agent;       // agent.rs - handles the autonomous agents that move around
 mod camera;      // camera.rs - handles camera controls (zoom, rotation)
 mod player;      // player.rs - handles the player character
 mod planisphere; // planisphere.rs - handles geographic coordinate conversion and projections
-mod ui ;        // ui.rs - handles user interface elements (like text, buttons, etc.)
+mod ui;          // ui.rs - handles user interface elements (like text, buttons, etc.)
 mod game_object; // game_object.rs - handles object definitions and spawning logic
 
 
@@ -20,7 +16,7 @@ mod game_object; // game_object.rs - handles object definitions and spawning log
 // Import the specific functions we need from our modules
 // 'use' statements make functions available in this file without the module prefix
 use terrain::{create_terrain_gnomonic_rectangular, RenderedSubpixels, TriangleSubpixelMapping, TerrainCenter}; // Pure terrain mesh generation
-use camera::{setup_third_person_camera, update_third_person_camera, third_person_camera_rotation, update_camera_light, handle_camera_zoom, handle_camera_height}; // Camera-related functions
+use camera::{setup_third_person_camera, update_third_person_camera, update_camera_light, handle_camera_zoom, handle_camera_height}; // Camera-related functions
 use player::{move_player, check_player_sensors, check_player_ground_sensors, terrain_recreation_system}; // Player-related functions
 use ui::{setup_ui, update_coordinate_display}; // UI setup function and coordinate display update system
 use game_object::{setup_object_templates, cleanup_orphaned_overlays, setup_entity_overlays, 
@@ -51,15 +47,14 @@ pub struct TerrainAssetTracker {
 
 impl Default for TerrainConfig {
     fn default() -> Self {
-        let radius = 200; // Main terrain radius setting - change this to adjust terrain size
         Self {
-            terrain_radius: radius,
-            recreation_threshold: radius / 4,  // Auto-calculate as 1/4 of radius
-            recreation_cooldown: 1.0,
-            landscape_radius: 3,               // Drastically reduced radius to limit landscape element count
-            item_radius: 10,                   // Reduced radius to limit item count
-            beacon_radius: 5,                  // Small radius for debug beacons
-            agent_search_radius: 5,            // Reduced radius to prevent exponential nested loops
+            terrain_radius: config::terrain::RADIUS,
+            recreation_threshold: config::terrain::RADIUS / config::terrain::RECREATION_THRESHOLD_DIVISOR,
+            recreation_cooldown: config::terrain::RECREATION_COOLDOWN_SECS,
+            landscape_radius: config::terrain::LANDSCAPE_RADIUS,
+            item_radius: 10,
+            beacon_radius: 5,
+            agent_search_radius: 5,
         }
     }
 }
@@ -114,7 +109,7 @@ impl TerrainAssetTracker {
 /// Main function - the entry point of our Rust program
 /// This is where the program starts running when you execute it
 fn main() {
-    let sub_k = 1; // Number of subpixels in the vertical direction
+    let sub_k = 4; // Number of subpixels in the vertical direction
     let image_path = "assets/maps/sphere_texture.png";
 
 
@@ -127,7 +122,6 @@ fn main() {
     let circumference = planisphere_width * sub_k;
     let radius = circumference as f64 / (2.0 * std::f64::consts::PI);
     planisphere.set_radius(radius);
-    eprintln!("Radius set to: {}", radius);
 
     // Compute initial subpixel from desired geographic coordinates
     let initial_lon = 7.0;
@@ -178,17 +172,12 @@ fn main() {
         .add_systems(Update, terrain_recreation_system)     // Handle terrain recreation with asset cleanup and coordinate sync
         .add_systems(Update, update_coordinate_display)      // Update the UI coordinate display with current player position
         .add_systems(Update, (
-            //move_agents,                    // Update agent movement and behavior
-            //check_sensors,                  // Handle agent item pickup detection
-            //check_ground_sensors,           // Handle agent ground collision detection
-            //agent_raycast_system,           // Handle agent raycasting for obstacle detection
             move_player,                    // Handle player movement with keyboard
             check_player_sensors,           // Handle player item pickup detection
             check_player_ground_sensors,    // Handle player ground collision detection
             setup_entity_overlays,          // Setup UI overlays for entities
             cleanup_orphaned_overlays,      // Clean up old UI overlays
             update_entity_ui_overlays,
-            //player_raycast_system,          // Handle player raycasting for obstacle detection
         ))
         .add_systems(Update, (
             player::cast_ray_from_camera,
@@ -199,19 +188,11 @@ fn main() {
         
         .add_systems(Update, (
             update_third_person_camera,     // Update camera to follow player
-            third_person_camera_rotation,   // Handle camera rotation with mouse
             handle_camera_zoom,             // Handle mouse wheel zoom
             handle_camera_height,           // Handle keyboard arrow keys for height
-            update_camera_light,           // Update light to follow camera
+            update_camera_light,            // Update light to follow camera
         ))
-        //.add_systems(Update, (
-            //update_landscape_lod,          // Update landscape element LOD and culling
-            //cull_landscape_by_terrain,     // Hide landscape elements outside rendered terrain
-            //debug_agent_raycast_system,    // Debug visualization for agent raycasts
-            //track_player_subpixel_position_raycast_old, // DEPRECATED: Keep for compatibility (will be removed)
-            
-        //))
-        
+
         // Start the game loop - this runs until the window is closed
         .run();
 }

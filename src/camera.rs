@@ -1,6 +1,6 @@
 // Import statements - bring in code from other modules and crates
 use bevy::prelude::*;                               // Bevy game engine core functionality
-use bevy::input::mouse::{MouseMotion, MouseButton, MouseScrollUnit, MouseWheel}; // Mouse input handling
+use bevy::input::mouse::{MouseScrollUnit, MouseWheel}; // Mouse input handling
 use bevy::input::keyboard::KeyCode; // Keyboard input handling
 use bevy::input::ButtonInput; // Button input handling
 use crate::player::Player;                         // Import Player component
@@ -39,15 +39,15 @@ pub fn setup_third_person_camera(mut commands: Commands) {
         
         // Add our custom third person camera controller
         ThirdPersonCamera {
-            distance: 20.0,         // Distance behind the player
-            height: 14.0,           // Height above the player
-            follow_speed: 5.0,      // How fast the camera follows
-            min_distance: 3.0,      // Minimum zoom distance
-            max_distance: 50.0,     // Maximum zoom distance
-            zoom_speed: 2.0,        // Speed of zoom changes
-            min_height: 2.0,        // Minimum height above player
-            max_height: 50.0,       // Maximum height above player
-            height_speed: 15.0,     // Speed of height changes
+            distance: crate::config::camera::DISTANCE,
+            height: crate::config::camera::HEIGHT,
+            follow_speed: crate::config::camera::FOLLOW_SPEED,
+            min_distance: crate::config::camera::MIN_DISTANCE,
+            max_distance: crate::config::camera::MAX_DISTANCE,
+            zoom_speed: crate::config::camera::ZOOM_SPEED,
+            min_height: 2.0,
+            max_height: 50.0,
+            height_speed: 15.0,
         },
     ));
     
@@ -105,18 +105,6 @@ pub fn update_third_person_camera(
             camera_transform.look_at(look_target, Vec3::Y);
         }
     }
-}
-
-/// Handle third person camera rotation using mouse drag
-/// This function runs every frame and handles mouse button presses and mouse movement
-/// NOTE: This system is currently disabled since the player uses mouse look directly
-pub fn third_person_camera_rotation(
-    _mouse_button: Res<ButtonInput<MouseButton>>,
-    mut _mouse_motion: EventReader<MouseMotion>,
-    mut _camera_query: Query<&mut ThirdPersonCamera>,
-) {
-    // Camera rotation is disabled because the player uses mouse look directly
-    // The camera follows the player's orientation automatically
 }
 
 /// Handle mouse wheel zoom for the third person camera

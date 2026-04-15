@@ -44,10 +44,8 @@ impl Default for PlayerBundle {
                 next_jump_time: 0.0,
                 is_grounded: false,
                 facing_angle: 0.0,
-                mouse_sensitivity: 0.002,
-                move_speed: 15.0,
-
-
+                mouse_sensitivity: crate::config::player::MOUSE_SENSITIVITY,
+                move_speed: crate::config::player::MOVE_SPEED,
             },
             player_inventory: PlayerInventory::default(),
             entity_position: EntitySubpixelPosition::default(), // NEW: Initialize shared positioning
@@ -204,7 +202,7 @@ pub fn drop_stone(
                     angvel: Vec3::ZERO,
                 };
                 let physics_bundle = (
-                    RigidBody::Fixed,
+                    RigidBody::Dynamic,
                     crate::game_object::create_collider_from_shape(&crate::game_object::ObjectShape::Cube { size: Vec3::ONE }),
                     velocity,
                     ExternalImpulse::default(),
@@ -256,7 +254,6 @@ pub fn move_player(
 ) {
     // Removed map_boundary - player can move freely
     let current_time = time.elapsed_secs();            // How many seconds since the game started
-    let _delta_time = time.delta_secs();                // Time since last frame
     
     // Process the player entity
     for (_impulse, mut transform, mut player, mut velocity) in query.iter_mut() {
@@ -271,21 +268,14 @@ pub fn move_player(
         transform.rotation = Quat::from_rotation_y(player.facing_angle);
         
         // JUMPING BEHAVIOR
-        //if keyboard_input.pressed(KeyCode::Space) && player.is_grounded && current_time >= player.next_jump_time {
-        if keyboard_input.pressed(KeyCode::Space)  {
-            let jump_y = 8.0;  // Upward force
-            velocity.linvel.y = jump_y;  // Set upward velocity
-            player.next_jump_time = current_time + 0.5;  // 0.5 second jump cooldown
-            player.is_grounded = false;  // Player is now airborne
-            //println!("Player jumped!");
+        if keyboard_input.pressed(KeyCode::Space) && player.is_grounded && current_time >= player.next_jump_time {
+            velocity.linvel.y = crate::config::player::JUMP_FORCE;
+            player.next_jump_time = current_time + crate::config::player::JUMP_COOLDOWN_SECS;
+            player.is_grounded = false;
         }
         
-        //if player.is_grounded {
-        if true {
+        if player.is_grounded {
             // Calculate movement directions relative to CURRENT facing angle
-            // This ensures movement direction follows the player's sight in real-time
-            // In Bevy's coordinate system: +X is right, +Z is forward, +Y is up
-            // Forward direction (negative Z is forward in Bevy)
 
             let forward_dir = transform.forward();
             let right_dir = transform.right();
@@ -437,10 +427,10 @@ fn check_terrain_need_recreation(
         let center_world_pos = Vec3::new(0.0,  player_transform.translation.y, 0.0);// eprintln!("Player entity: {:?}, Position: ({:.2}, {:.2}, {:.2})", player_entity, player_transform.translation.x, player_transform.translation.y, player_transform.translation.z);
         let distance_tiles = (player_world_pos - center_world_pos).length()/planisphere.mean_tile_size as f32;
         if distance_tiles > 0.5 * terrain_center.max_subpixel_distance as f32 {
-            eprintln!("Player is too far from terrain center! Distance: {:.2} tiles, max allowed: {}", distance_tiles, terrain_center.max_subpixel_distance);
+            println!("Player is too far from terrain center! Distance: {:.2} tiles, max allowed: {}", distance_tiles, terrain_center.max_subpixel_distance);
             needs_recreation = true; // Set flag to recreate terrain
             next_terrain_center_tile = player_subpixel_position.subpixel; // Use player's subpixel as new center
-            eprintln!("next center at {} {} {}", next_terrain_center_tile.0, next_terrain_center_tile.1, next_terrain_center_tile.2)
+            println!("next center at {} {} {}", next_terrain_center_tile.0, next_terrain_center_tile.1, next_terrain_center_tile.2)
     }
     // Placeholder for actual logic to determine if terrain needs recreation
     // This could be based on player position, time since last recreation, etc.
