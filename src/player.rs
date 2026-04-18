@@ -426,7 +426,7 @@ fn check_terrain_need_recreation(
         let player_world_pos = player_transform.translation;
         let center_world_pos = Vec3::new(0.0,  player_transform.translation.y, 0.0);// eprintln!("Player entity: {:?}, Position: ({:.2}, {:.2}, {:.2})", player_entity, player_transform.translation.x, player_transform.translation.y, player_transform.translation.z);
         let distance_tiles = (player_world_pos - center_world_pos).length()/planisphere.mean_tile_size as f32;
-        if distance_tiles > 0.5 * terrain_center.max_subpixel_distance as f32 {
+        if distance_tiles > 5.0 {  //0.5 * terrain_center.max_subpixel_distance as f32 {
             println!("Player is too far from terrain center! Distance: {:.2} tiles, max allowed: {}", distance_tiles, terrain_center.max_subpixel_distance);
             needs_recreation = true; // Set flag to recreate terrain
             next_terrain_center_tile = player_subpixel_position.subpixel; // Use player's subpixel as new center
@@ -500,24 +500,23 @@ pub fn terrain_recreation_system(
     );
 
 
-    //despawn_unified_object_from_name(&mut commands, "TerrainCenter", object_query);
-    //spawn_terraincenter_at_world_position(&mut commands, &mut meshes, &mut materials, Some(&planisphere), &terrain_center, Vec3::new(0.0, 0.0, 0.0));
-
-
-    if needs_recreation {
-
-        println!("Player distance from terrain center exceeds threshold. Recreating terrain... (last recreation: {:.1}s ago)", time_since_last_recreation);
+    if needs_recreation || terrain_center.force_recreation {
+        terrain_center.force_recreation = false;
+        println!("Recreating terrain... (last recreation: {:.1}s ago, method: {:?})", time_since_last_recreation, terrain_center.distance_method);
  
 
 
-        terrain_center.set_ijk(
-            next_terrain_center_tile.0, 
-            next_terrain_center_tile.1, 
-            next_terrain_center_tile.2, 
-            &planisphere
-        );
-        
-        reinitialize_positions(player_query, object_query);
+        // Only relocate the terrain center when the player moved too far.
+        // A forced recreation (e.g. method change) keeps the existing center.
+        if needs_recreation {
+            terrain_center.set_ijk(
+                next_terrain_center_tile.0,
+                next_terrain_center_tile.1,
+                next_terrain_center_tile.2,
+                &planisphere
+            );
+            reinitialize_positions(player_query, object_query);
+        }
 
 
 

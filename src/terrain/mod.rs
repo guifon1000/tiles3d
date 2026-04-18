@@ -124,8 +124,6 @@ pub fn entities_in_rendered_subpixels(
     entities
 }
 
-#[derive(Component)]
-struct MeshComputeTask(Task<Mesh>);
 
 /// Resource to track terrain center changes for object repositioning
 #[derive(Resource, Default)]
@@ -133,31 +131,18 @@ pub struct TerrainCenter {
     pub longitude: f64,
     pub latitude: f64,
     pub subpixel: (usize, usize, usize),
-    pub world_position: Vec3,
     pub max_subpixel_distance: usize,
     pub last_recreation_time: f32,
-    pub terrain_recreated: bool,
+    /// Which distance metric to use when selecting subpixels for rendering
+    pub distance_method: planisphere::DistanceMethod,
+    /// Set to true to force a terrain rebuild on the next frame (e.g. after changing distance_method)
+    pub force_recreation: bool,
     pub rendered_subpixels: RenderedSubpixels,
     pub triangle_mapping: TriangleSubpixelMapping,
-    // Store the actual tasks instead of the task pool
-    pub mesh_tasks: Vec<(String, Task<(Mesh, RenderedSubpixels, TriangleSubpixelMapping)>)>,
 }
 
 impl TerrainCenter {
-    pub fn new() -> Self {
-        Self {
-            longitude: 0.0,
-            latitude: 0.0,
-            subpixel: (0, 0, 0),
-            world_position: Vec3::ZERO,
-            max_subpixel_distance: 62,
-            last_recreation_time: -10.0,
-            terrain_recreated: false,
-            rendered_subpixels: RenderedSubpixels::new(),
-            triangle_mapping: TriangleSubpixelMapping::new(),
-            mesh_tasks: Vec::new(),
-        }
-    }
+
 
     pub fn set_ijk(&mut self, i: usize, j: usize, k: usize, planisphere: &planisphere::Planisphere) {
         self.subpixel = (i, j, k);
@@ -167,50 +152,6 @@ impl TerrainCenter {
         self.last_recreation_time = current_time;
     }
 
-    /// Resets the `terrain_recreated` flag to false after terrain recreation is complete.
-    /// This flag is used to signal to other systems that terrain recreation has finished.
-    pub fn reset_flag(&mut self) {
-        self.terrain_recreated = false;
-    }
-
-    pub fn poll_completed_tasks(&mut self) -> Vec<(String, (Mesh, RenderedSubpixels, TriangleSubpixelMapping))> {
-        let mut completed = Vec::new();
-
-        // Retain only incomplete tasks, collect completed ones
-        self.mesh_tasks.retain_mut(|(task_id, task)| {
-            if let Some(mesh) = future::block_on(future::poll_once(task)) {
-                completed.push((task_id.clone(), mesh));
-                false // Remove completed task
-            } else {
-                true // Keep running task
-            }
-        });
-
-        completed
-    }
-
-    pub fn cancel_task(&mut self, task_id: &str) {
-        self.mesh_tasks.retain(|(id, _)| id != task_id);
-    }
-
-    pub fn spawn_terrain_task(&mut self, planisphere: &planisphere::Planisphere) {
-        let task_pool = AsyncComputeTaskPool::get();
-
-        // Copy primitive values
-        let subpixel = self.subpixel;
-        let max_subpixel_distance = self.max_subpixel_distance;
-
-        // Clone the entire planisphere (if it implements Clone)
-        let planisphere_owned = planisphere.clone();
-
-        let task = task_pool.spawn(async move {
-            // Now we own planisphere_owned, not borrowing
-            compute_mesh_async(&planisphere_owned, subpixel, max_subpixel_distance)
-        });
-
-        let id_string = "zob";
-        self.mesh_tasks.push((id_string.to_string(), task));
-    }
 }
 
 /// Helper function to find the nearest free subpixel position using spiral search

@@ -1,195 +1,237 @@
-# CLAUDE.md
-
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+# CLAUDE.md — Planet Terrain Game
 
 ## Project Overview
 
-**tiles3d** is a Rust/Bevy 3D terrain exploration simulation featuring infinite terrain generation, subpixel coordinate precision, and physics-based autonomous agents. The project demonstrates advanced techniques in coordinate system conversion, asset lifecycle management, and real-time terrain recreation.
+A Bevy-based planet exploration game. The player navigates a procedurally rendered
+terrain mapped onto a sphere at real-world scale. The terrain is derived from a
+pre-computed RGBA bitmap (the "planisphere") using a reduced latitude grid.
 
-## Commands
+---
 
-### Building & Running
-```bash
-cargo run --release              # Run optimized build
-cargo check                      # Quick syntax validation
-timeout 10s cargo run 2>&1       # Test run with timeout
-```
+## Core Concepts
 
-### Development Commands
-```bash
-# Monitor texture selection debug output
-cargo run 2>&1 | grep "DEBUG: red" | head -20
+### Reduced Latitude Grid
 
-# Track terrain recreation events
-cargo run 2>&1 | grep "Recreating terrain"
+The planisphere uses a reduced grid: each pixel has a fixed number of sub-pixel
+rows (2^k north-south), but the number of sub-pixel columns decreases toward the
+poles: `round(2^k * cos(φ))`. This avoids over-sampling near the poles.
 
-# Generate texture atlas from individual images
-cd assets/textures && python atlas_creator.py
-```
+- `N` pixels in latitude, `2N` pixels in longitude (at equator)
+- `k` — global subdivision level, driven by player altitude (high altitude → low k)
+- Near the poles, special rendering (polar discs) is reserved for future work
 
-### Testing & Debugging
-- No formal test suite - use timeout runs for behavior verification
-- Wireframe mode available via `RapierDebugRenderPlugin` (currently commented out)
-- Console debugging through `eprintln!` statements throughout codebase
+### Sub-pixels
 
-## Architecture
+A sub-pixel is the atomic terrain unit — one vertex in the mesh. It is addressed by:
+- `ipixel` — pixel row (latitude axis)
+- `jpixel` — pixel column (longitude axis)
+- `ksouspixel` — linear index of the sub-pixel within the pixel (decomposable into `ki`, `kj`)
 
-### Core System Relationships
+Key function (already implemented): `subpixel_to_indices(sub_row, sub_col, k) -> (ipixel, jpixel, ksouspixel)`
 
-The architecture centers around three interconnected coordinate systems:
-1. **Geographic Coordinates** (lat/lon degrees) - Real-world positioning
-2. **World Coordinates** (Vec3 units) - 3D game space with physics
-3. **Subpixel Coordinates** (i,j,k indices) - High-resolution tile grid
+### Chunks
 
-**Data Flow:**
-```
-sphere_texture.png → planisphere.rs (coordinate conversion + RGBA extraction) 
-                  → terrain.rs (mesh generation + texture selection)
-                  → player.rs (movement + recreation triggers)
-```
+A chunk is a `2^k2 × 2^k2` sub-pixel window, independent of pixel boundaries.
+`k2 <= k` is a fixed parameter defining chunk size in sub-pixels.
 
-### Key Systems
+Chunks are the unit of async mesh generation and LOD management.
 
-**Terrain Generation** (`terrain.rs`):
-- `create_terrain_gnomonic_rectangular()` - Primary mesh generation using gnomonic projection
-- `select_texture_from_rgba()` - Maps RGBA values to texture atlas indices (currently only RED channel)
-- Material setup with enhanced visual properties (metallic: 0.1, roughness: 0.8)
-
-**Asset Management** (`main.rs` + `terrain.rs`):
-- `TerrainAssetTracker` resource prevents memory leaks during terrain recreation
-- Comprehensive cleanup of mesh/material handles before regeneration
-- Proper asset removal from Bevy's asset system
-
-**Coordinate Conversion** (`planisphere.rs`):
-- `Planisphere::load_from_file()` - Loads sphere_texture.png and extracts RGBA channels
-- `get_rgba_at_subpixel()` - Returns color values for terrain position
-- Geographic ↔ World coordinate transformations using gnomonic projection
-
-**Recreation System** (`player.rs`):
-- `terrain_recreation_system()` - Triggers when player moves >20 tiles from center
-- `coordinate_sync_system()` - Repositions entities after terrain regeneration
-- 1-second cooldown prevents rapid recreations
-
-### File Structure
-
-**Core Systems:**
-- `main.rs` - Entry point, resource initialization, system registration
-- `planisphere.rs` - Geographic coordinate system, RGBA processing, projection math
-- `terrain.rs` - Mesh generation, texture selection, material properties
-- `player.rs` - Movement controls, terrain recreation triggers, positioning
-
-**Supporting Systems:**
-- `camera.rs` - Third-person camera with mouse look and zoom
-- `agent.rs` - AI entities with physics-based movement and obstacle detection
-- `game_object.rs` - Unified object spawning and entity management
-- `ui.rs` - Real-time coordinate display across all three systems
-- `landscape.rs` - Decorative elements (trees, rocks, collectible items)
-- `beacons.rs` - Debug visualization markers
-
-### Configuration Constants
-
-**Terrain System** (`main.rs` TerrainConfig):
 ```rust
-terrain_radius: 80,              // Terrain size in tiles
-recreation_threshold: 20,        // Distance before recreation (1/4 radius)
-recreation_cooldown: 1.0,        // Minimum seconds between recreations
+struct ChunkCoordGlobal {
+    sub_row: u32,  // NW corner, global sub-pixel row
+    sub_col: u32,  // NW corner, global sub-pixel col
+}
+
+struct ChunkCoordLocal {
+    ci: i32,  // signed, relative to gnomon, in chunk units (north-south)
+    cj: i32,  // signed, relative to gnomon, in chunk units (east-west)
+}
+
+struct Chunk {
+    coord: ChunkCoordGlobal,
+    k: u8,
+    k2: u8,
+    data: Vec<SubPixel>,  // (1<<k2)^2 entries, row-major
+}
+
+struct SubPixel {
+    height: f32,
+    // additional pixelfields (color, biome, etc.) TBD
+}
 ```
 
-**Player Movement** (`player.rs`):
+### Gnomon
+
+The gnomon is the anchor of the local chunk grid. It is a fixed geographic point
+expressed in global sub-pixel coordinates. The chunk grid is centered on it.
+
 ```rust
-move_speed: 15.0,               // Movement speed
-mouse_sensitivity: 0.002,       // Look sensitivity
-jump_force: 8.0,               // Upward jump velocity
+struct Gnomon {
+    sub_row: u32,
+    sub_col: u32,
+}
 ```
 
-**Subpixel System** (`planisphere.rs`):
+- `ChunkCoordLocal` → `ChunkCoordGlobal` conversion goes through the Gnomon
+- The gnomon moves only occasionally (floating origin pattern), not every frame
+- When the gnomon moves, chunk recycling must avoid a full regeneration spike — **this is an open problem, handle with care**
+
+### Coordinate conversion
+
 ```rust
-width: 3000, height: 1500,      // Base pixel dimensions
-subpixel_divisions: 8,          // Subdivisions per pixel (8×8 = 64 per pixel)
+fn local_to_global(local: ChunkCoordLocal, gnomon: &Gnomon, k2: u8) -> ChunkCoordGlobal {
+    let size = 1i64 << k2;
+    ChunkCoordGlobal {
+        sub_row: (gnomon.sub_row as i64 + local.ci as i64 * size) as u32,
+        sub_col: (gnomon.sub_col as i64 + local.cj as i64 * size) as u32,
+    }
+}
+
+fn n_subcols_at_pixel_row(ipixel: u32, k: u8, n_pixels_lat: u32) -> u32 {
+    let phi = pixel_row_to_lat(ipixel, n_pixels_lat);
+    (phi.cos() * (1u32 << k) as f32).round().max(1.0) as u32
+}
+
+fn subpixel_to_indices(sub_row: u32, sub_col: u32, k: u8) -> (u32, u32, u32) {
+    let subdivision = 1u32 << k;
+    let ipixel = sub_row / subdivision;
+    let ki = sub_row % subdivision;
+    let spp = n_subcols_at_pixel_row(ipixel, k, N_PIXELS_LAT);
+    let jpixel = sub_col / spp;
+    let kj = sub_col % spp;
+    let ksouspixel = ki * subdivision + kj;
+    (ipixel, jpixel, ksouspixel)
+}
 ```
 
-## Texture System
+---
 
-### Current Implementation
-- 16×16 texture atlas (256 slots available, 19 textures used)
-- Selection driven by RED channel only (values 0-9)
-- Available textures: deepwater, dirt, drygrass, grass, stone, lava, moss, sand, snow, water, etc.
-- Simple threshold-based mapping in `select_texture_from_rgba()`
+## Rendering Architecture
 
-### Data Source
-- `assets/maps/sphere_texture.png` - Dual-purpose map providing elevation AND texture data
-- RGBA channels extracted per subpixel position
-- `assets/textures/atlas_creator.py` - Generates enhanced contrast atlas from individual images
+### Gnomonic Projection
 
-### Material Properties
-Materials configured for enhanced visual appeal:
+The terrain is rendered in a local flat plane using a gnomonic projection centered
+on the gnomon. The gnomon follows the player (with hysteresis — it jumps, not slides).
+This makes the terrain locally flat, which is visually correct at ground level.
+
+- Projection is re-defined each time the mesh is reloaded
+- At very high altitude (k → 0), a switch to spherical rendering is planned but not yet implemented
+
+### LOD
+
+- `k` drives global subdivision (altitude-dependent)
+- `k2` drives chunk size (fixed parameter)
+- Same chunk coord + different k = different resolution, same geographic coverage
+- Chunk generation is a pure function: `generate_chunk(bitmap, coord, k, k2) -> Chunk`
+
+### Chunk Lifecycle (target architecture)
+
+Each chunk has a status:
+
 ```rust
-base_color: Color::srgb(1.0, 1.0, 1.0),  // Neutral for texture display
-metallic: 0.1,                            // Minimal shine
-roughness: 0.8,                           // Natural matte surface
+enum ChunkStatus {
+    Pending,
+    Generating,
+    Ready,
+    Stale,
+}
 ```
 
-## Performance & Memory Management
+Chunk generation must run on `AsyncComputeTaskPool` — never on the main thread.
+Generation priority: chunks in the player's direction of travel first.
 
-### Asset Lifecycle
-**CRITICAL**: The project recently fixed major memory leaks in terrain recreation:
-- `TerrainAssetTracker` tracks all mesh/material handles
-- `cleanup_assets()` removes old handles before creating new terrain
-- Prevents progressive slowdown during gameplay
+---
 
-### Coordinate Systems
-**Subpixel Precision**: 3000×1500 pixels × 8×8 subdivisions = 24+ million addressable positions
-**Terrain Coverage**: ~6400 subpixels rendered simultaneously (80×80 tiles)
-**Physics**: Trimesh colliders with triangle-to-subpixel mapping for ground detection
+## Pixelfields
 
-## Controls
-- **WASD**: Movement
-- **Mouse**: Look around
-- **Mouse Wheel**: Camera zoom
-- **Right-Click + Drag**: Camera rotation
-- **Space**: Jump (with cooldown)
+The bitmap is RGBA. Each channel is a "pixelfield" with its own semantic.
+Pixelfields can also be computed (not just read from the bitmap).
+Sub-pixel values are interpolated from pixel values — interpolation logic already exists.
 
-## Known Issues & Debugging
+**Do not assume channel semantics** — ask before using r/g/b/a for specific purposes.
 
-### Current Limitations
-1. **Texture Variety**: Only 10 textures used from 256 available (RED channel only)
-2. **Debug Output**: `eprintln!` statements clutter console during texture selection
-3. **Simple Selection**: Threshold-based texture mapping could be more sophisticated
+---
 
-### Debug Features
-- Real-time coordinate display in UI
-- Console output for subpixel positions and terrain recreation events
-- Asset cleanup messages: "ASSET CLEANUP: Removed X meshes and Y materials"
-- Coordinate sync messages during recreation
+## Debug: Chunk Wireframe Overlay
 
-### Performance Notes
-- Asset management prevents memory leaks ✅
-- Terrain recreation properly synchronized ✅
-- Physics colliders cleaned up during regeneration ✅
+During chunk system development, a wireframe overlay visualizes the chunk grid
+superimposed on the existing terrain. This keeps the game fully playable while
+the chunk architecture is being built.
 
-## Development Notes
+### Design
 
-### When Working on Textures
-1. Current selection in `select_texture_from_rgba()` only uses RED channel (lines ~15-30)
-2. Expand to use GREEN/BLUE/ALPHA channels for more variety
-3. Atlas creator enhances contrast/saturation for vivid appearance
-4. Texture indices: 0=deepwater, 1=dirt, 2=drygrass, 3=grass, 4=stone, etc.
+- A separate set of Bevy entities, tagged with a marker component:
 
-### When Working on Terrain
-1. Gnomonic projection centers around player position
-2. Recreation triggered by Manhattan distance calculation
-3. Triangle mapping cleared during recreation to prevent physics issues
-4. Mesh generation uses height data from sphere_texture.png
+```rust
+#[derive(Component)]
+struct ChunkDebugWireframe;
+```
 
-### When Working on Coordinates
-1. All systems use shared coordinate conversion functions
-2. Player position tracked across terrain recreations
-3. Subpixel system provides smooth movement between discrete positions
-4. Geographic coordinates enable real-world mapping
+- Each debug chunk entity is a mesh that **exactly follows terrain height** —
+  same geometry pipeline as the terrain, same gnomonic projection, same heights.
+- A small vertical offset (`+y`, a few cm in world units) avoids z-fighting with
+  the terrain mesh. No collision on these entities.
+- Rendered with Bevy's `WireframePlugin` / `Wireframe` component.
+- Toggled via a debug key (e.g. F3) — despawn/spawn all `ChunkDebugWireframe` entities.
 
-## Quick Start for New Sessions
-1. Run `cargo check` to verify compilation
-2. Brief test run: `timeout 10s cargo run 2>&1` to see current behavior
-3. Check recent git commits for context on recent changes
-4. Use TodoWrite tool for complex multi-step tasks
-5. Focus areas typically involve texture system, terrain generation, or coordinate handling
+### LOD of debug chunks
+
+Debug chunks reflect the target LOD strategy. The effective `k2` for a chunk at
+distance `d` chunks from the player is:
+
+```
+k2(d) = max(0, k - floor(d / R))
+```
+
+where `R` is the LOD ring radius in chunks (exposed as a parameter `LOD_RING_RADIUS`).
+
+- At `d = 0` (player's chunk): `k2 = k` — maximum resolution
+- Each additional `R` chunks of distance: `k2` drops by 1
+- At `d >= k * R`: `k2 = 0` — chunk is a single quad
+
+This produces concentric LOD rings around the player. The debug overlay makes
+these rings directly visible.
+
+### What NOT to do for debug wireframe
+
+- Do not reuse terrain mesh entities — debug entities are always separate
+- Do not add physics/collision to debug wireframe entities
+- Do not generate debug meshes on the main thread
+- Do not hardcode the vertical offset — expose it as a parameter `DEBUG_WIREFRAME_Y_OFFSET`
+
+---
+
+## Current State vs Target
+
+| Concern | Current | Target |
+|---|---|---|
+| Chunk definition | pixel = chunk | independent `Chunk` struct |
+| Chunk generation | blocking, main thread | async, `AsyncComputeTaskPool` |
+| Gnomon movement | full remesh on trigger | incremental chunk recycling |
+| Debug wireframe | none | wireframe overlay with LOD rings |
+| Polar rendering | none | polar disc, future work |
+| High-altitude view | none | spherical fallback at k=0 |
+
+---
+
+## What NOT to do
+
+- Do not conflate pixels and chunks — they are independent grids
+- Do not generate meshes on the main thread
+- Do not move the gnomon and regenerate everything synchronously
+- Do not assume chunks align with pixel boundaries
+- Do not implement polar disc rendering yet — it is explicitly deferred
+- Do not implement k=0 spherical fallback yet — deferred
+
+---
+
+## Key Parameters
+
+| Name | Meaning |
+|---|---|
+| `N` | number of pixels in latitude |
+| `k` | global subdivision level (altitude-driven) |
+| `k2` | chunk size parameter, `1<<k2` sub-pixels per side, `k2 <= k` |
+| `N_PIXELS_LAT` | = N, used in coordinate conversions |
+| `LOD_RING_RADIUS` | radius in chunks of each LOD ring, used in `k2(d)` formula |
+| `DEBUG_WIREFRAME_Y_OFFSET` | vertical offset of debug wireframe above terrain (world units) |

@@ -18,10 +18,10 @@ pub fn terrain_mesh(
         let current_latitude = current_pixel_norm_lat * 180.0 - 90.0;
         let current_lon_subdivisions = (planisphere.subpixel_divisions as f64 * current_latitude.to_radians().cos()).max(1.0) as usize;
         // Create vertices for this subpixel — each corner gets its own altitude
-        let corner_altis = planisphere.get_alti_at_subpixel_corners(i as i32, j as i32, k);
+        let corner_altis = planisphere.get_altitude_at_subpixel_corners(i as i32, j as i32, k);
         for ((lon, lat), alti) in corners.iter().zip(corner_altis.iter()) {
             let (x, y) = planisphere.geo_to_gnomonic(*lon, *lat, lonlat_gnomocenter.0, lonlat_gnomocenter.1);
-            vertices.push([x as f32, (10.0/planisphere.get_subpixel_divisions() as f32) * alti, y as f32]);
+            vertices.push([x as f32, (5.0 as f32) * alti, y as f32]);
         }
         let atlas_size = crate::config::atlas::SIZE;
 

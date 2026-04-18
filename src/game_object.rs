@@ -257,7 +257,6 @@ pub fn update_entity_ui_overlays(
     window_query: Query<&Window>,
 ) {
     let Ok((camera, camera_transform)) = camera_query.single() else { return; };
-    let Ok(window) = window_query.single() else { return; };
 
     for (mut style, mut visibility, ui_text, children) in ui_query.iter_mut() {
         // Trouver l'entité cible
@@ -347,7 +346,6 @@ pub fn raycast_tile_locator_system(
 
     for (entity_id, transform, mut locator, mut subpixel_position, object_definition) in query.iter_mut() {
         // Perform raycast from the entity's position
-        let entname = object_definition.object_type.clone();
         let ray_origin = transform.translation + Vec3::new(0.0, 10.0, 0.0); // Start raycast slightly above the entity
         //eprint!("Raycasting from entity {:?} at position {:?}", entname, ray_origin);
         let ray_direction = Vec3::new(0.0, -1.0, 0.0); // Downward raycast
@@ -551,7 +549,7 @@ pub fn spawn_player(
                     planisphere,
                     terrain_center,
                     &template,
-                    Vec3::new(0.0, 10.0, 0.),
+                    Vec3::new(0.0, 150.0, 0.),
                     10.0, // Use player's Y position + offset
                     CollisionBehavior::Dynamic, // Set collision behavior to dynamic for dropped items
                     (

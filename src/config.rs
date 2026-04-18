@@ -1,10 +1,12 @@
 /// Terrain generation and recreation constants
 pub mod terrain {
-    pub const RADIUS: usize = 200;
+    /// Terrain render radius in subpixels (used directly as max_subpixel_distance).
+    pub const RADIUS: usize = 20;
+    pub const PLANET_RADIUS: f32 = 1000.0;
     pub const RECREATION_THRESHOLD_DIVISOR: usize = 4;
     pub const RECREATION_COOLDOWN_SECS: f32 = 1.0;
     pub const LANDSCAPE_RADIUS: usize = 3;
-    pub const SPAWN_PROBABILITY: f64 = 0.003;
+    pub const SUB_K: usize = 4;
 }
 
 /// Player movement constants
@@ -13,6 +15,8 @@ pub mod player {
     pub const MOUSE_SENSITIVITY: f32 = 0.002;
     pub const JUMP_FORCE: f32 = 8.0;
     pub const JUMP_COOLDOWN_SECS: f32 = 0.5;
+    pub const INITIAL_LON: f32 = 7.0;
+    pub const INITIAL_LAT: f32 = -41.0;
 }
 
 /// Third-person camera constants

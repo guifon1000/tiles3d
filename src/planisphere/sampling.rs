@@ -195,7 +195,7 @@ impl Planisphere {
     ///
     /// Each corner is at a distinct fractional pixel-grid position, so the terrain
     /// mesh will have proper height variation instead of flat subpixel quads.
-    pub fn get_alti_at_subpixel_corners(&self, i: i32, j: i32, k: usize) -> [f32; 4] {
+    pub fn get_altitude_at_subpixel_corners(&self, i: i32, j: i32, k: usize) -> [f32; 4] {
         let sub_i = k / self.subpixel_divisions;
         let sub_j = k % self.subpixel_divisions;
         let lon_divs = self.get_pixel_lon_subdivisions(i as usize, j as usize);

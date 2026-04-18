@@ -18,7 +18,7 @@ mod game_object; // game_object.rs - handles object definitions and spawning log
 use terrain::{create_terrain_gnomonic_rectangular, RenderedSubpixels, TriangleSubpixelMapping, TerrainCenter}; // Pure terrain mesh generation
 use camera::{setup_third_person_camera, update_third_person_camera, update_camera_light, handle_camera_zoom, handle_camera_height}; // Camera-related functions
 use player::{move_player, check_player_sensors, check_player_ground_sensors, terrain_recreation_system}; // Player-related functions
-use ui::{setup_ui, update_coordinate_display}; // UI setup function and coordinate display update system
+use ui::{setup_ui, update_coordinate_display, handle_method_buttons, update_method_button_colors};
 use game_object::{setup_object_templates, cleanup_orphaned_overlays, setup_entity_overlays, 
     update_entity_ui_overlays, setup_player}; // Game object spawning and management
 use crate::planisphere::Planisphere;
@@ -109,7 +109,7 @@ impl TerrainAssetTracker {
 /// Main function - the entry point of our Rust program
 /// This is where the program starts running when you execute it
 fn main() {
-    let sub_k = 4; // Number of subpixels in the vertical direction
+    let sub_k = crate::config::terrain::SUB_K; // Number of subpixels in the vertical direction
     let image_path = "assets/maps/sphere_texture.png";
 
 
@@ -118,17 +118,16 @@ fn main() {
         .expect("Failed to load elevation map");
 
     // Set the radius before making planisphere immutable
-    let planisphere_width = planisphere.get_width_pixels();
-    let circumference = planisphere_width * sub_k;
-    let radius = circumference as f64 / (2.0 * std::f64::consts::PI);
+    let planet_radius = config::terrain::PLANET_RADIUS as f64;
+    //let circumference = planet_radius/(planisphere_width * sub_k);
+    let radius = planet_radius;//circumference as f64 / (2.0 * std::f64::consts::PI);
     planisphere.set_radius(radius);
 
     // Compute initial subpixel from desired geographic coordinates
-    let initial_lon = 7.0;
-    let initial_lat = -59.999;
+    let initial_lon = crate::config::player::INITIAL_LON as f64;
+    let initial_lat = crate::config::player::INITIAL_LAT as f64;
     let (iplayer, jplayer, kplayer) = planisphere.geo_to_subpixel(initial_lon, initial_lat);
-    let _subpixel_view_distance = 75;
-    let _recreation_threshold  = (0.4 * _subpixel_view_distance as f32) as i32;
+    let max_subpixel_distance = config::terrain::RADIUS;
 
     // Create and configure the Bevy App (the main game engine instance)
     App::new()
@@ -152,13 +151,12 @@ fn main() {
             longitude: initial_lon,
             latitude: initial_lat,
             subpixel: (iplayer, jplayer, kplayer),
-            world_position: Vec3::ZERO, // Initial world position at the center
-            max_subpixel_distance: _subpixel_view_distance,
+            max_subpixel_distance,
             last_recreation_time: -10.0,
-            terrain_recreated: false,
+            distance_method: crate::planisphere::DistanceMethod::default(),
+            force_recreation: false,
             rendered_subpixels: RenderedSubpixels::new(),                //Vec<(usize, usize, usize, [(f64, f64); 4])>,
             triangle_mapping: TriangleSubpixelMapping::new(),
-            mesh_tasks: Vec::new(),
         })
         .insert_resource(RenderedSubpixels::new())
         .insert_resource(TriangleSubpixelMapping::default())
@@ -170,7 +168,8 @@ fn main() {
         .add_systems(Startup, (setup_object_templates, setup_player).chain())
         // Systems that run every frame (game loop) - split into groups to avoid tuple size limit
         .add_systems(Update, terrain_recreation_system)     // Handle terrain recreation with asset cleanup and coordinate sync
-        .add_systems(Update, update_coordinate_display)      // Update the UI coordinate display with current player position
+        .add_systems(Update, update_coordinate_display)
+        .add_systems(Update, (handle_method_buttons, update_method_button_colors))
         .add_systems(Update, (
             move_player,                    // Handle player movement with keyboard
             check_player_sensors,           // Handle player item pickup detection
@@ -209,11 +208,8 @@ fn setup_physics(
     mut meshes: ResMut<Assets<Mesh>>,                   // 3D mesh asset storage
     mut materials: ResMut<Assets<StandardMaterial>>,    // Material asset storage
     mut terrain_center: ResMut<TerrainCenter>,          // Terrain center resource
-    terrain_config: Res<TerrainConfig>,                 // Terrain configuration settings
     asset_server: Res<AssetServer>,                     // Asset server resource
     planisphere: Res<planisphere::Planisphere>,
-    mut rendered_subpixels: ResMut<RenderedSubpixels>,  // Rendered subpixels resource
-    mut triangle_mapping: ResMut<TriangleSubpixelMapping>, // Triangle to subpixel mapping
     mut asset_tracker: ResMut<TerrainAssetTracker>,     // Asset tracker for cleanup
     time: Res<Time>,                                    // Time resource for profiling
 ) {

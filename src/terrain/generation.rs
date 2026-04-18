@@ -83,16 +83,16 @@ pub fn create_terrain_gnomonic_rectangular(
     mut asset_tracker: Option<&mut ResMut<crate::TerrainAssetTracker>>,
     time: &Res<Time>,
 ) {
-    // Get subpixels using Chebyshev (rectangular) distance method
     let t0 = std::time::Instant::now();
+    let method = terrain_center.distance_method;
     let subpixels = planisphere.get_subpixels_by_distance_method(
         terrain_center.subpixel.0,
         terrain_center.subpixel.1,
         terrain_center.subpixel.2,
         terrain_center.max_subpixel_distance,
-        crate::planisphere::DistanceMethod::Chebyshev);
+        method);
 
-    println!("Generated {} subpixels within distance {} using method Chebyshev", subpixels.len(), terrain_center.max_subpixel_distance);
+    println!("Generated {} subpixels within distance {} using method {:?}", subpixels.len(), terrain_center.max_subpixel_distance, method);
     println!("center at {} {} {}", terrain_center.subpixel.0, terrain_center.subpixel.1, terrain_center.subpixel.2);
     let t1 = std::time::Instant::now();
     println!("Subpixel generation took {:.3} ms", (t1 - t0).as_secs_f64() * 1000.0);
